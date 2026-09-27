@@ -1,0 +1,14 @@
+{
+  "name": "esdm-backend",
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.3",
+    "cors": "^2.8.5",
+    "papaparse": "^5.4.1",
+    "node-fetch": "^3.3.2"
+  }
+}
