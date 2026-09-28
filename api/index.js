@@ -30,7 +30,7 @@ app.get('/api/data', async (req, res) => {
 
     if (!result.values) {
       console.log('Google Sheet Error:', result);
-      return res.status(500).json({ error: `Gagal baca sheet 111111 `, detail: result });
+      return res.status(500).json({ error: `Gagal baca sheet `, detail: result });
     }
     
     const [headers,...rows] = result.values;
@@ -46,7 +46,7 @@ app.get('/api/data', async (req, res) => {
 
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'sfffsfsf'});
+    res.status(500).json({ error: err.message});
   }
 });
 
