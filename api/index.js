@@ -23,7 +23,7 @@ app.get('/api/data', async (req, res) => {
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}?key=${API_KEY}`;
 */
         const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?gid=${GID}&tqx=out:json`;
-
+return res.json({ data: url});
     const response = await fetch(url);
     const result = await response.json();
 
@@ -31,7 +31,7 @@ app.get('/api/data', async (req, res) => {
       console.log('Google Sheet Error:', result);
       return res.status(500).json({ error: `Gagal baca sheet 111111 `, detail: result });
     }
-    return res.json({ data: result});
+    
     const [headers,...rows] = result.values;
     const data = rows.map(row => {
       let obj = {};
