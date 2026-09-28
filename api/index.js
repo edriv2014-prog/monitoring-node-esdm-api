@@ -23,7 +23,7 @@ app.get('/api/data', async (req, res) => {
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}?key=${API_KEY}`;
 
 */
-    const url =`https://docs.google.com/spreadsheets/d/${SHEET_NAME}/edit?gid=${GID}#gid=${GID}`
+    const url =`https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit?gid=${GID}#gid=${GID}`;
     const response = await fetch(url);
     const result = await response.json();
 
