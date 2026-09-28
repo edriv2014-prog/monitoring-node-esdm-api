@@ -1,67 +1,79 @@
-import cors from 'cors';
-import express from 'express';
+import Papa from 'papaparse';
 
-const app = express();
-app.use(cors());
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const SHEET_ID = '1f83CxoN-7Oqa_F7LwqejfK8bIrpW0wGJgZAkkeVgbik';
+  const GID = req.query.gid || '285923348';
 
-function parseDetailOutage(cell) {
-  if (!cell) return [];
-  // Pisah "1. Pusdatin\nDuration : 14 jam\nRFO :..." jadi 2 item
-  return cell.split(/\n(?=\d+\.\s)/g).map(chunk => {
-    const node = chunk.match(/^\d+\.\s*([^\n]+)/)?.[1]?.trim() || '-';
-    const durasi = chunk.match(/Duration\s*:\s*([^\n]+)/i)?.[1]?.trim() || '-';
-    const rfo = chunk.match(/RFO\s*:\s*([\s\S]*)/i)?.[1]?.replace(/\n/g,' ').trim() || '-';
-    return { node, durasi, rfo };
-  }).filter(x=>x.node!=='-');
-}
-
-app.get('/api/data', async (req, res) => {
   try {
-    const SHEET_ID = '1f83CxoN-7Oqa_F7LwqejfK8bIrpW0wGJgZAkkeVgbik';
-    const GID = req.query.gid || '285923348';
+    const csvUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${GID}`;
+    const r = await fetch(csvUrl);
+    const text = await r.text();
 
-    // PAKAI CSV BIAR HEADER BARIS 2 KEBACA BENER
-    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${GID}`;
-    const r = await fetch(url);
-    const csvText = await r.text();
+    const parsed = Papa.parse(text, { header: false, skipEmptyLines: false });
+    const rows = parsed.data;
 
-    const lines = csvText.split('\n');
-    // baris 0 = Tanggal | Icon | DTP
-    // baris 1 = Backhaul | Normal | Outage | Overload | Detail Outage | Status...
-    const header2 = lines[1].split(',').map(h=>h.replace(/"/g,'').trim());
-
+    // rows[0] = header tingkat 1, rows[1] = header tingkat 2
+    // rows[1][0]=Tanggal, rows[1][5]=Detail Outage Icon, rows[1][12]=Detail Outage DTP
     const data = [];
-    for (let i=2; i<lines.length; i++) {
-      // pakai regex split CSV sederhana
-      const cols = lines[i].match(/(".*?"|[^",]+)(?=\s*,|\s*$)/g) || [];
-      if (!cols.length) continue;
-      const clean = cols.map(c=>c.replace(/^"|"$/g,'').trim());
 
-      const tanggal = clean[0];
-      if (!tanggal ||!tanggal.includes('2026')) continue;
+const parseChunk = (cell) => {
+  if(!cell) return [];
+  // Bersihkan baris kosong dobel
+  const cleaned = cell.replace(/\n\s*\n/g, '\n').trim();
+  return cleaned.split(/\n?(?=\d+\.\s)/g).map(c=>{
+    const lines = c.trim();
+    const node = lines.match(/^\d+\.\s*([^\n]+)/)?.[1]?.trim();
+    // Duration bisa di baris selanjutnya, bukan satu baris
+    const durMatch = lines.match(/Duration\s*:\s*([^\n]+)/i);
+    const rfoMatch = lines.match(/RFO\s*:\s*([\s\S]*)/i);
 
-      const iconDetail = clean[5] || ''; // Kolom F = Icon Detail Outage
-      const dtpDetail = clean[12] || ''; // Kolom M = DTP Detail Outage
+    const dur = durMatch? durMatch[1].trim() : '-';
+    const rfo = rfoMatch? rfoMatch[1].replace(/\n/g,' ').trim() : '-';
 
-      const iconItems = parseDetailOutage(iconDetail);
-      const dtpItems = parseDetailOutage(dtpDetail);
+    if(!node) return null;
+    return { node, dur, rfo };
+  }).filter(Boolean);
+};
 
-      [...iconItems.map(x=>({...x, link:'Icon'})),...dtpItems.map(x=>({...x, link:'DTP'}))].forEach(item=>{
+    for(let i=2; i<rows.length; i++){
+      const row = rows[i];
+      const tgl = row[0]?.trim();
+      if(!tgl) continue;
+
+      const iconDetail = row[5] || ''; // Kolom F
+      const dtpDetail = row[12] || ''; // Kolom M
+
+      const all = [...parseChunk(iconDetail).map(x=>({...x, link:'Icon'})),...parseChunk(dtpDetail).map(x=>({...x, link:'DTP'}))];
+
+      if(all.length===0){
+        // kalau tidak ada detail, tetep bikin 1 baris biar tanggal gak hilang
         data.push({
-          Tanggal: tanggal,
-          'Node/Pos': item.node,
-          LINK: item.link,
-          KENDALA: item.rfo,
-          Durasi: item.durasi,
-          Status: clean[7] || 'Ready'
+          Tanggal: tgl,
+          'Node/Pos': it.node,
+          LINK: it.link,
+          KENDALA: it.rfo,
+          Durasi: it.dur,
+          Status: 'Ready'
         });
-      });
+//        data.push({ Tanggal: tgl, 'Node/Pos': '-', LINK: row[1]||'Normal', KENDALA: '-', Durasi: '-' });
+      } else {
+        all.forEach(it=>{
+        data.push({
+          Tanggal: tgl,
+          'Node/Pos': it.node,
+          LINK: it.link,
+          KENDALA: it.rfo,
+          Durasi: it.dur,
+          Status: 'Ready'
+        });
+//          data.push({ Tanggal: tgl, 'Node/Pos': it.node, LINK: it.link, KENDALA: it.rfo, Durasi: it.dur });
+        });
+      }
     }
 
-    res.json({ data });
+    res.json({ total: data.length, data: data.reverse() }); // terbaru di atas
   } catch(e){
     res.status(500).json({ error: e.message });
   }
-});
-
-export default app;
+}
