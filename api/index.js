@@ -19,24 +19,27 @@ export default async function handler(req, res) {
 
     function extract(cell) {
       if (!cell) return [];
-      const clean = cell.replace(/\n\s*\n/g, '\n');
-      // pisah per nomor: "1. Pos PGA..."
-      const parts = clean.split(/(?=^\d+\.|\n\d+\.)/m);
+      // 1. Hilangkan \r, rapikan
+      let clean = cell.replace(/\r/g, '').trim();
+      // 2. INI KUNCINYA: kalau ada " 2. Pos PGA" di tengah kalimat tanpa enter, paksa jadi enter
+      clean = clean.replace(/\s+(\d+\.)\s+(?=[A-Z])/g, '\n$1 ');
+
+      const parts = clean.split(/\n(?=\d+\.\s)/);
       const out = [];
       for (let part of parts) {
         part = part.trim();
         if (!part) continue;
         const nodeMatch = part.match(/^\d+\.\s*([^\n]+)/);
         const durMatch = part.match(/Duration\s*:\s*([^\n]+)/i);
-        const rfoMatch = part.match(/RFO\s*:\s*([\s\S]+)/i);
+        const rfoMatch = part.match(/RFO\s*:\s*([\s\S]+?)(?=\n\d+\.|$)/i);
 
         const node = nodeMatch? nodeMatch[1].trim() : null;
-        if (!node) continue;
+        if (!node || node === '-') continue;
 
         out.push({
           node: node,
           durasi: durMatch? durMatch[1].trim() : '-',
-          kendala: rfoMatch? rfoMatch[1].replace(/\n/g, ' ').trim() : '-'
+          kendala: rfoMatch? rfoMatch[1].replace(/\s+/g, ' ').trim() : '-'
         });
       }
       return out;
