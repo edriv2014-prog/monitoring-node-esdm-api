@@ -2,78 +2,79 @@ import Papa from 'papaparse';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET');
+
   const SHEET_ID = '1f83CxoN-7Oqa_F7LwqejfK8bIrpW0wGJgZAkkeVgbik';
   const GID = req.query.gid || '285923348';
 
   try {
     const csvUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${GID}`;
-    const r = await fetch(csvUrl);
-    const text = await r.text();
+    const response = await fetch(csvUrl);
+    const text = await response.text();
 
-    const parsed = Papa.parse(text, { header: false, skipEmptyLines: false });
+    const parsed = Papa.parse(text, { header: false });
     const rows = parsed.data;
 
-    // rows[0] = header tingkat 1, rows[1] = header tingkat 2
-    // rows[1][0]=Tanggal, rows[1][5]=Detail Outage Icon, rows[1][12]=Detail Outage DTP
-    const data = [];
+    const result = [];
 
-const parseChunk = (cell) => {
-  if(!cell) return [];
-  // Bersihkan baris kosong dobel
-  const cleaned = cell.replace(/\n\s*\n/g, '\n').trim();
-  return cleaned.split(/\n?(?=\d+\.\s)/g).map(c=>{
-    const lines = c.trim();
-    const node = lines.match(/^\d+\.\s*([^\n]+)/)?.[1]?.trim();
-    // Duration bisa di baris selanjutnya, bukan satu baris
-    const durMatch = lines.match(/Duration\s*:\s*([^\n]+)/i);
-    const rfoMatch = lines.match(/RFO\s*:\s*([\s\S]*)/i);
+    function extract(cell) {
+      if (!cell) return [];
+      const clean = cell.replace(/\n\s*\n/g, '\n');
+      // pisah per nomor: "1. Pos PGA..."
+      const parts = clean.split(/(?=^\d+\.|\n\d+\.)/m);
+      const out = [];
+      for (let part of parts) {
+        part = part.trim();
+        if (!part) continue;
+        const nodeMatch = part.match(/^\d+\.\s*([^\n]+)/);
+        const durMatch = part.match(/Duration\s*:\s*([^\n]+)/i);
+        const rfoMatch = part.match(/RFO\s*:\s*([\s\S]+)/i);
 
-    const dur = durMatch? durMatch[1].trim() : '-';
-    const rfo = rfoMatch? rfoMatch[1].replace(/\n/g,' ').trim() : '-';
+        const node = nodeMatch? nodeMatch[1].trim() : null;
+        if (!node) continue;
 
-    if(!node) return null;
-    return { node, dur, rfo };
-  }).filter(Boolean);
-};
+        out.push({
+          node: node,
+          durasi: durMatch? durMatch[1].trim() : '-',
+          kendala: rfoMatch? rfoMatch[1].replace(/\n/g, ' ').trim() : '-'
+        });
+      }
+      return out;
+    }
 
-    for(let i=2; i<rows.length; i++){
+    for (let i = 2; i < rows.length; i++) {
       const row = rows[i];
-      const tgl = row[0]?.trim();
-      if(!tgl) continue;
+      if (!row ||!row[0]) continue;
+      const tanggal = row[0].trim();
+      if (tanggal.length < 6) continue;
 
-      const iconDetail = row[5] || ''; // Kolom F
-      const dtpDetail = row[12] || ''; // Kolom M
+      const iconDetail = row[5] || '';
+      const dtpDetail = row[12] || '';
 
-      const all = [...parseChunk(iconDetail).map(x=>({...x, link:'Icon'})),...parseChunk(dtpDetail).map(x=>({...x, link:'DTP'}))];
+      const iconItems = extract(iconDetail);
+      const dtpItems = extract(dtpDetail);
 
-      if(all.length===0){
-        // kalau tidak ada detail, tetep bikin 1 baris biar tanggal gak hilang
-        data.push({
-          Tanggal: tgl,
-          'Node/Pos': it.node,
-          LINK: it.link,
-          KENDALA: it.rfo,
-          Durasi: it.dur,
+      const combined = [
+       ...iconItems.map(e => ({...e, link: 'Icon' })),
+       ...dtpItems.map(e => ({...e, link: 'DTP' }))
+      ];
+
+      if (combined.length === 0) continue;
+
+      for (const item of combined) {
+        result.push({
+          Tanggal: tanggal,
+          'Node/Pos': item.node,
+          LINK: item.link,
+          KENDALA: item.kendala,
+          Durasi: item.durasi,
           Status: 'Ready'
-        });
-//        data.push({ Tanggal: tgl, 'Node/Pos': '-', LINK: row[1]||'Normal', KENDALA: '-', Durasi: '-' });
-      } else {
-        all.forEach(it=>{
-        data.push({
-          Tanggal: tgl,
-          'Node/Pos': it.node,
-          LINK: it.link,
-          KENDALA: it.rfo,
-          Durasi: it.dur,
-          Status: 'Ready'
-        });
-//          data.push({ Tanggal: tgl, 'Node/Pos': it.node, LINK: it.link, KENDALA: it.rfo, Durasi: it.dur });
         });
       }
     }
 
-    res.json({ total: data.length, data: data.reverse() }); // terbaru di atas
-  } catch(e){
-    res.status(500).json({ error: e.message });
+    res.json({ data: result.reverse() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 }
