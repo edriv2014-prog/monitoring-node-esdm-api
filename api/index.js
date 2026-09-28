@@ -14,7 +14,7 @@ app.get('/api/data', async (req, res) => {
     const SHEET_ID = process.env.SHEET_ID;
     const API_KEY = process.env.SHEET_API_KEY;
     const SHEET_NAME = process.env.SHEET_NAME || 'Sheet1';
-    const GID = import.meta.env.GID || '285923348'
+    const GID = process.env.GID || '285923348'
 
     if (!SHEET_ID ||!API_KEY) {
       return res.status(500).json({ error: 'SHEET_ID / SHEET_API_KEY belum di set di Vercel' });
