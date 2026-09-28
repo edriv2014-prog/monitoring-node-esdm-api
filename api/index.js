@@ -31,7 +31,7 @@ app.get('/api/data', async (req, res) => {
       console.log('Google Sheet Error:', result);
       return res.status(500).json({ error: `Gagal baca sheet 111111 `, detail: result });
     }
-
+    res.json({ data: result});
     const [headers,...rows] = result.values;
     const data = rows.map(row => {
       let obj = {};
