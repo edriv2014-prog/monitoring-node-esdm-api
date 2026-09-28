@@ -29,7 +29,7 @@ app.get('/api/data', async (req, res) => {
 
     if (!result.values) {
       console.log('Google Sheet Error:', result);
-      return res.status(500).json({ error: `Gagal baca sheet ${url}`, detail: result });
+      return res.status(500).json({ error: `Gagal baca sheet `, detail: result });
     }
 
     const [headers,...rows] = result.values;
