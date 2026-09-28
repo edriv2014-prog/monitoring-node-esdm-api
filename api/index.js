@@ -1,22 +1,16 @@
-const express = require('express')
-const cors = require('cors')
+const express = require('express');
+const cors = require('cors');
 
-const app = express()
-app.use(cors())
+const app = express();
+app.use(cors());
+app.use(express.json());
 
 app.get('/', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    message: 'Backend ESDM jalan - HIDE ACUAN',
-    time: new Date().toISOString()
-  })
-})
+  res.json({ status: 'OK - API ESDM HIDUP!' });
+});
 
-app.get('/api/health', (req, res) => res.json({ ok: true }))
-
-// Ini yang nanti kita isi filter ICON PGA
 app.get('/api/data', (req, res) => {
-  res.json({ filter: 'icon_Detail != null && DTP_Detail != null', data: [] })
-})
+  res.json({ data: [] });
+});
 
-module.exports = app
+module.exports = app;
