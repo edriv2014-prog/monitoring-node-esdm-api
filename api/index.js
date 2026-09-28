@@ -19,11 +19,11 @@ app.get('/api/data', async (req, res) => {
       return res.status(500).json({ error: 'SHEET_ID / SHEET_API_KEY belum di set di Vercel' });
     }
 
-
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}?key=${API_KEY}`;
 /*
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}?key=${API_KEY}`;
+
 */
-//    const url =`https://docs.google.com/spreadsheets/d/${SHEET_NAME}/edit?gid=${GID}#gid=${GID}`
+    const url =`https://docs.google.com/spreadsheets/d/${SHEET_NAME}/edit?gid=${GID}#gid=${GID}`
     const response = await fetch(url);
     const result = await response.json();
 
