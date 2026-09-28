@@ -1,53 +1,33 @@
-import cors from 'cors';
-import express from 'express';
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-app.get('/', (req, res) => {
-  res.json({ status: 'OK - API ESDM HIDUP!' });
-});
-
 app.get('/api/data', async (req, res) => {
   try {
-    const SHEET_ID = process.env.SHEET_ID;
-    const API_KEY = process.env.SHEET_API_KEY;
-    const GID = process.env.GID || '285923348'
-    const SHEET_NAME = process.env.SHEET_NAME || 'Sheet1';
+    const SHEET_ID = process.env.SHEET_ID || '1f83CxoN-7Oqa_F7LwqejfK8bIrpW0wGJgZAkkeVgbik';
+    const GID = req.query.gid || '285923348';
+    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?gid=${GID}&tqx=out:json`;
 
-    if (!SHEET_ID ||!API_KEY) {
-      return res.status(500).json({ error: 'SHEET_ID / SHEET_API_KEY belum di set di Vercel' });
-    }
-/*
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}?key=${API_KEY}`;
-*/
-        //const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?gid=${GID}&tqx=out:json`;
-//return res.json({ data: url});
-  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?gid=${GID}&tqx=out:json`
     const response = await fetch(url);
-    const result = await response.json();
+    const text = await response.text();
 
-    if (!result.values) {
-      console.log('Google Sheet Error:', result);
-      return res.status(500).json({ error: `Gagal baca sheet `, detail: result });
+    if (text.trim().startsWith('<!DOCTYPE') || text.includes('Sorry, unable')) {
+      return res.status(500).json({ error: 'Sheet masih Restricted! Ubah jadi Anyone with the link dulu', url });
     }
-    
-    const [headers,...rows] = result.values;
-    const data = rows.map(row => {
+
+    // Potong wrapper google.visualization...
+    const jsonStr = text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1);
+    const json = JSON.parse(jsonStr);
+
+    const headers = json.table.cols.map(c => c.label || c.id || '');
+    const data = json.table.rows.map(r => {
       let obj = {};
-      headers.forEach((h, i) => {
-        obj[h] = row[i] || '';
+      r.c.forEach((cell, i) => {
+        obj[headers[i]] = cell? (cell.f?? cell.v?? '') : '';
       });
       return obj;
     });
 
-    res.json({ data: data });
+    res.json({ data });
 
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message});
+    res.status(500).json({ error: err.message });
   }
 });
-
-export default app;
