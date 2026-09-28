@@ -14,13 +14,15 @@ app.get('/api/data', async (req, res) => {
     const SHEET_ID = process.env.SHEET_ID;
     const API_KEY = process.env.SHEET_API_KEY;
     const SHEET_NAME = process.env.SHEET_NAME || 'Sheet1';
+    const GID = import.meta.env.GID || '285923348'
 
     if (!SHEET_ID ||!API_KEY) {
       return res.status(500).json({ error: 'SHEET_ID / SHEET_API_KEY belum di set di Vercel' });
     }
-
+/*
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}?key=${API_KEY}`;
-
+*/
+    const url =`https://docs.google.com/spreadsheets/d/${SHEET_NAME}/edit?gid=${GID}#gid=${GID}`
     const response = await fetch(url);
     const result = await response.json();
 
