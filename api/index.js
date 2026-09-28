@@ -13,6 +13,7 @@ app.get('/api/data', async (req, res) => {
   try {
     const SHEET_ID = process.env.SHEET_ID;
     const API_KEY = process.env.SHEET_API_KEY;
+    const GID = process.env.VITE_GID || '285923348'
     const SHEET_NAME = process.env.SHEET_NAME || 'Sheet1';
 
     if (!SHEET_ID ||!API_KEY) {
