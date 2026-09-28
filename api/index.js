@@ -1,5 +1,5 @@
-const express = require('express');
-const cors = require('cors');
+import express from 'express';
+import cors from 'cors';
 
 const app = express();
 app.use(cors());
@@ -13,4 +13,4 @@ app.get('/api/data', (req, res) => {
   res.json({ data: [] });
 });
 
-module.exports = app;
+export default app;
