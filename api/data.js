@@ -40,11 +40,10 @@ export default async function handler(req,res){
     if(!SHEET_ID) return res.status(500).json({error:'SHEET_ID kosong', data:[]})
 
     const url=`https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`
-    console.log("url",url);
     const r = await fetch(url)
     const csv = await r.text()
     if(csv.trim().startsWith('<')){
-      return res.status(500).json({error:'Sheet belum Public! '+csv.slice(0,200), data:[]})
+      return res.status(500).json({error:' ${url} Sheet belum Public! '+csv.slice(0,200), data:[]})
     }
     const table = parseCSV(csv)
     const out=[]
