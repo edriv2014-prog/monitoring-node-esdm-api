@@ -1,5 +1,7 @@
 import axios from 'axios';
 
+
+// di paling atas file src/data/index.js kamu, tambahin ini
 function parseCSV(t){
   const rows=[];let cur='',row=[],q=false
   for(let i=0;i<t.length;i++){
@@ -19,11 +21,10 @@ function parseCSV(t){
 
 function splitPos(text){
   if(!text||text.trim()=='-') return []
-  // kalau isinya "3 node (PPSDM, Tekmira, PEP)" -> jangan split
   if(/^\d+\s+node/i.test(text.trim())) return [text.trim()]
-  // split 1. 2. 3.
   return String(text).split(/(?=\d+\.\s)/).map(s=>s.trim()).filter(s=>s.length>5)
 }
+
 
 export default async function handler(req,res){
   const gid=req.query.gid||'285923348'
