@@ -1,6 +1,5 @@
 import axios from 'axios';
 
-// Parser CSV tahan koma 17,6 dan newline dalam cell
 function parseCSV(t){
   const rows=[];let cur='',row=[],q=false
   for(let i=0;i<t.length;i++){
@@ -19,8 +18,10 @@ function parseCSV(t){
 }
 
 function splitPos(text){
-  if(!text||text.trim()=='-')return[]
-  // Pisah 1. 2. 3. walaupun tanpa newline (kasus 20 Sep Tangkoko)
+  if(!text||text.trim()=='-') return []
+  // kalau isinya "3 node (PPSDM, Tekmira, PEP)" -> jangan split
+  if(/^\d+\s+node/i.test(text.trim())) return [text.trim()]
+  // split 1. 2. 3.
   return String(text).split(/(?=\d+\.\s)/).map(s=>s.trim()).filter(s=>s.length>5)
 }
 
@@ -35,22 +36,24 @@ export default async function handler(req,res){
   for(let i=1;i<table.length;i++){
     const r=table[i]
     const tgl=(r[0]||'').trim(); if(!tgl) continue
-    const iconCell=r[5]||'' // <- cek di sheet kamu, kalau meleset ganti jadi r[6]
-    const dtpCell=r[11]||'' // <- cek juga r[12] kalau DTP masih -
+    const iconCell=r[5]||''
+    const dtpCell=r[11]||''
 
-    for(const raw of splitPos(iconCell)){
-      const node=raw.replace(/^\d+\.\s*/,'').split(/Duration/i)[0].trim().slice(0,80)
-      const dur=(raw.match(/Duration\s*:\s*([^\n]+)/i)||[])[1]||''
-      const rfo=(raw.match(/RFO\s*:\s*([\s\S]+)/i)||[])[1]||raw
-      out.push({Tanggal:tgl,"Node/Pos":node,LINK:'Icon',KENDALA:(dur?dur+' - ':'')+rfo.replace(/\s+/g,' ').slice(0,500)})
+    const pushCell=(cell,link)=>{
+      for(const raw of splitPos(cell)){
+        const nodeRaw=raw.replace(/^\d+\.\s*/,'').split(/Duration/i)[0].trim()
+        const node=nodeRaw.slice(0,100)
+        const dur=(raw.match(/Duration\s*:\s*([^\n]+)/i)||[])[1]||''
+        const rfo=(raw.match(/RFO\s*:\s*([\s\S]+)/i)||[])[1]||raw
+        // kalau masih "-" kasih raw biar tidak hilang
+        let kendala=(dur?dur+' - ':'')+rfo.replace(/\s+/g,' ').trim()
+        if(!kendala||kendala=='-') kendala=raw.slice(0,500)
+        out.push({Tanggal:tgl,"Node/Pos":node,LINK:link,KENDALA:kendala.slice(0,500)})
+      }
     }
-    for(const raw of splitPos(dtpCell)){
-      const node=raw.replace(/^\d+\.\s*/,'').split(/Duration/i)[0].trim().slice(0,80)
-      const dur=(raw.match(/Duration\s*:\s*([^\n]+)/i)||[])[1]||''
-      const rfo=(raw.match(/RFO\s*:\s*([\s\S]+)/i)||[])[1]||raw
-      out.push({Tanggal:tgl,"Node/Pos":node,LINK:'DTP',KENDALA:(dur?dur+' - ':'')+rfo.replace(/\s+/g,' ').slice(0,500)})
-    }
+    pushCell(iconCell,'Icon')
+    pushCell(dtpCell,'DTP')
   }
   res.setHeader('Cache-Control','no-store')
-  res.json({data:out, total:out.length})
+  res.json({data:out})
 }
