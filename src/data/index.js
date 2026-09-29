@@ -1,21 +1,6 @@
-import axios from 'axios';
+import fetch from 'node-fetch'
+import Papa from 'papaparse'
 
-function parseCSV(t){
-  const rows=[];let cur='',row=[],q=false
-  for(let i=0;i<t.length;i++){
-    let c=t[i], n=t[i+1]
-    if(c=='"'&&q&&n=='"'){cur+='"';i++;continue}
-    if(c=='"'){q=!q;continue}
-    if(c==','&&!q){row.push(cur);cur='';continue}
-    if((c=='\n'||c=='\r')&&!q){
-      if(cur||row.length){row.push(cur);rows.push(row);row=[];cur=''}
-      if(c=='\r'&&n=='\n')i++;continue
-    }
-    cur+=c
-  }
-  if(cur||row.length){row.push(cur);rows.push(row)}
-  return rows
-}
 function splitPos(text){
   if(!text||String(text).trim()=='-') return []
   const tt=String(text).trim()
@@ -27,11 +12,13 @@ function splitPos(text){
 export default async function getData(gid='285923348'){
   try{
     const SHEET_ID=process.env.SHEET_ID
-    if(!SHEET_ID) { console.log('SHEET_ID kosong!'); return [] }
+    if(!SHEET_ID){ console.log('SHEET_ID kosong'); return [] }
     const url=`https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`
-    const {data:csv} = await axios.get(url,{responseType:'text'})
-    const table=parseCSV(csv)
-    console.log('CSV rows:',table.length)
+    const res = await fetch(url)
+    const csv = await res.text()
+    const parsed = Papa.parse(csv, {skipEmptyLines:true})
+    const table = parsed.data
+    console.log('CSV rows:', table.length)
     const out=[]
     for(let i=1;i<table.length;i++){
       const r=table[i]; if(!r||!r[0]) continue
@@ -51,10 +38,10 @@ export default async function getData(gid='285923348'){
       pushCell(iconCell,'Icon')
       pushCell(dtpCell,'DTP')
     }
-    console.log('OUT:',out.length)
+    console.log('OUT:', out.length)
     return out
   }catch(e){
-    console.error('getData error:',e.message)
+    console.error('getData error:', e.message)
     return []
   }
 }
