@@ -1,3 +1,11 @@
+function extractId(s){
+  if(!s) return ''
+  s=s.trim()
+  // kalau user paste full URL https://docs.google.com/.../d/XXXX/edit
+  const m=s.match(/\/d\/([a-zA-Z0-9-_]+)/)
+  if(m) return m[1]
+  return s
+}
 function parseCSV(t){
   const rows=[];let cur='',row=[],q=false
   for(let i=0;i<t.length;i++){
@@ -24,17 +32,21 @@ function splitPos(text){
 
 export default async function handler(req,res){
   res.setHeader('Access-Control-Allow-Origin','*')
-  res.setHeader('Cache-Control','no-store')
   try{
-    const SHEET_ID = process.env.SHEET_ID
-    const gid = req.query.gid || '285923348'
-    if(!SHEET_ID) return res.status(500).json({error:'SHEET_ID belum di-set', data:[]})
+    let SHEET_ID=extractId(process.env.SHEET_ID)
+    const gid=req.query.gid||'285923348'
+    if(!SHEET_ID) return res.status(500).json({error:'SHEET_ID kosong', data:[]})
 
-    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`
-    const r = await fetch(url)
-    const csv = await r.text()
-    const table = parseCSV(csv)
+    const url=`https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`
+    const r=await fetch(url, {headers:{'User-Agent':'Mozilla/5.0'}})
+    const csv=await r.text()
 
+    // kalau masih HTML berarti Sheet belum di-Share
+    if(csv.trim().startsWith('<') || csv.includes('csp.withgoogle.com')){
+      return res.status(500).json({error:'Sheet belum Public! Share -> Anyone with link Viewer. CSV preview: '+csv.slice(0,200), data:[]})
+    }
+
+    const table=parseCSV(csv)
     const out=[]
     for(let i=1;i<table.length;i++){
       const row=table[i]; if(!row||!row[0]) continue
