@@ -4,7 +4,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET');
 
-  const SHEET_ID = process.env.SHEET_ID;//'1f83CxoN-7Oqa_F7LwqejfK8bIrpW0wGJgZAkkeVgbik';
+  const SHEET_ID = '1f83CxoN-7Oqa_F7LwqejfK8bIrpW0wGJgZAkkeVgbik';
   const GID = req.query.gid || '285923348';
 
   try {
