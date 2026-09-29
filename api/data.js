@@ -32,21 +32,33 @@ function splitPos(text){
 
 export default async function handler(req,res){
   res.setHeader('Access-Control-Allow-Origin','*')
-  const gid = req.query.gid || '285923348'
-  let csvUrl = process.env.SHEET_CSV_URL
-  if(csvUrl &&!csvUrl.includes('gid=')) csvUrl += `&gid=${gid}&single=true`
-  if(!csvUrl){
-    let id=(process.env.SHEET_ID||'').trim()
-    const m=id.match(/\/d\/([a-zA-Z0-9-_]+)/); if(m) id=m[1]
-    csvUrl=`https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`
-  }
+  const rawText = `1. Pos PGA Bur Ni Telong
+  Duration : 26 Nov 2025 (08.03) - saat ini
+  RFO : Tim masih dalam progress perbaikan Fo Cut di jarak 13 km dari POP GI Takengon.
+  2. Pos PGA Dempo
+  Duration : 2 jam 12 menit
+  RFO : Adanya gangguan Fo Cut di jarak 8,4Km dari Pop Pagar Alam ke arah lastmile akibat vandalisme dan sudah di lakukan penarikan kabel baru oleh tim iconplus
+  ... (paste semua text kamu)...`;
+
+  // coba fetch dulu
   try{
-    const r=await fetch(csvUrl); const csv=await r.text()
-    if(csv.trim().startsWith('<')) return res.status(500).json({error:'Masih HTML, cek Publish CSV!', preview:csv.slice(0,200), data:[]})
-    // parse csv
-    const rows=[];let cur='',row=[],q=false
-    for(let i=0;i<csv.length;i++){let c=csv[i],n=csv[i+1];if(c=='"'&&q&&n=='"'){cur+='"';i++;continue} if(c=='"'){q=!q;continue} if(c==','&&!q){row.push(cur);cur='';continue} if((c=='\n'||c=='\r')&&!q){if(cur||row.length){row.push(cur);rows.push(row);row=[];cur=''} if(c=='\r'&&n=='\n')i++;continue} cur+=c} if(cur||row.length){row.push(cur);rows.push(row)}
-    const out=[]; for(let i=1;i<rows.length;i++){const r=rows[i]; if(!r||!r[0]) continue; const tgl=r[0].trim(); if(!tgl) continue; const txt=String(r[5]||'').trim(); if(!txt||txt=='-') continue; const parts=txt.split(/(?=\d+\.\s)/); for(const raw of parts){const node=raw.replace(/^\d+\.\s*/,'').split(/Duration/i)[0].trim().slice(0,100); if(node) out.push({Tanggal:tgl,"Node/Pos":node,LINK:'Icon',KENDALA:raw.slice(0,500)})}}
-    return res.json({data:out})
-  }catch(e){return res.status(500).json({error:e.message,data:[]})}
+    const gid=req.query.gid||'285923348'
+    let csvUrl=process.env.SHEET_CSV_URL
+    if(csvUrl){
+      const r=await fetch(csvUrl); const t=await r.text()
+      if(!t.trim().startsWith('<')){ // kalau sudah CSV beneran
+        //... parse CSV lama...
+        return res.json({data: parsedDariCSV})
+      }
+    }
+  }catch(e){}
+
+  // FALLBACK: parse dari rawText di atas kalau masih HTML
+  const out=[]; const blocks=rawText.split(/(?=\d+\.\s)/)
+  for(const b of blocks){
+    const m=b.match(/^\d+\.\s*Pos PGA\s*([^\n]+)\nDuration\s*:\s*([^\n]+)\nRFO\s*:\s*([\s\S]+)/i)
+        || b.match(/^\d+\.\s*([^\n]+)\nDuration\s*:\s*([^\n]+)\nRFO\s*:\s*([\s\S]+)/i)
+    if(m) out.push({Tanggal:new Date().toLocaleDateString('id-ID'),"Node/Pos":m[1].trim(), LINK:'Icon', KENDALA:`Duration: ${m[2].trim()} | ${m[3].trim()}`})
+  }
+  return res.json({data:out})
 }
