@@ -32,37 +32,21 @@ function splitPos(text){
 
 export default async function handler(req,res){
   res.setHeader('Access-Control-Allow-Origin','*')
+  const gid = req.query.gid || '285923348'
+  let csvUrl = process.env.SHEET_CSV_URL
+  if(csvUrl &&!csvUrl.includes('gid=')) csvUrl += `&gid=${gid}&single=true`
+  if(!csvUrl){
+    let id=(process.env.SHEET_ID||'').trim()
+    const m=id.match(/\/d\/([a-zA-Z0-9-_]+)/); if(m) id=m[1]
+    csvUrl=`https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`
+  }
   try{
-    let SHEET_ID = (process.env.SHEET_ID||'').trim()
-    const m = SHEET_ID.match(/\/d\/([a-zA-Z0-9-_]+)/)
-    if(m) SHEET_ID = m[1]
-    const gid = req.query.gid || '285923348'
-    if(!SHEET_ID) return res.status(500).json({error:'SHEET_ID kosong', data:[]})
-
-    const url=`https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`
-    const r = await fetch(url)
-    const csv = await r.text()
-    if(csv.trim().startsWith('<')){
-      return res.status(500).json({error: url+'  Sheet belum Public11111! '+csv.slice(0,200), data:[]})
-    }
-    const table = parseCSV(csv)
-    const out=[]
-    for(let i=1;i<table.length;i++){
-      const row=table[i]; if(!row||!row[0]) continue
-      const tgl=String(row[0]||'').trim(); if(!tgl) continue
-      const iconCell=row[5]||''
-      const dtpCell=row[11]||''
-      const pushCell=(cell,link)=>{
-        for(const raw of splitPos(cell)){
-          const node=raw.replace(/^\d+\.\s*/,'').split(/Duration/i)[0].trim().slice(0,100)
-          const dur=(raw.match(/Duration\s*:\s*([^\n]+)/i)||[])[1]||''
-          const rfo=(raw.match(/RFO\s*:\s*([\s\S]+)/i)||[])[1]||raw
-          let kendala=(dur?dur+' - ':'')+rfo.replace(/\s+/g,' ').trim()
-          if(node) out.push({Tanggal:tgl,"Node/Pos":node,LINK:link,KENDALA:kendala.slice(0,500)})
-        }
-      }
-      pushCell(iconCell,'Icon'); pushCell(dtpCell,'DTP')
-    }
+    const r=await fetch(csvUrl); const csv=await r.text()
+    if(csv.trim().startsWith('<')) return res.status(500).json({error:'Masih HTML, cek Publish CSV!', preview:csv.slice(0,200), data:[]})
+    // parse csv
+    const rows=[];let cur='',row=[],q=false
+    for(let i=0;i<csv.length;i++){let c=csv[i],n=csv[i+1];if(c=='"'&&q&&n=='"'){cur+='"';i++;continue} if(c=='"'){q=!q;continue} if(c==','&&!q){row.push(cur);cur='';continue} if((c=='\n'||c=='\r')&&!q){if(cur||row.length){row.push(cur);rows.push(row);row=[];cur=''} if(c=='\r'&&n=='\n')i++;continue} cur+=c} if(cur||row.length){row.push(cur);rows.push(row)}
+    const out=[]; for(let i=1;i<rows.length;i++){const r=rows[i]; if(!r||!r[0]) continue; const tgl=r[0].trim(); if(!tgl) continue; const txt=String(r[5]||'').trim(); if(!txt||txt=='-') continue; const parts=txt.split(/(?=\d+\.\s)/); for(const raw of parts){const node=raw.replace(/^\d+\.\s*/,'').split(/Duration/i)[0].trim().slice(0,100); if(node) out.push({Tanggal:tgl,"Node/Pos":node,LINK:'Icon',KENDALA:raw.slice(0,500)})}}
     return res.json({data:out})
-  }catch(e){ return res.status(500).json({error:e.message, data:[]}) }
+  }catch(e){return res.status(500).json({error:e.message,data:[]})}
 }
