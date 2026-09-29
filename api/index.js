@@ -1,5 +1,19 @@
-import Papa from 'papaparse'
-
+function parseCSV(t){
+  const rows=[];let cur='',row=[],q=false
+  for(let i=0;i<t.length;i++){
+    let c=t[i], n=t[i+1]
+    if(c=='"'&&q&&n=='"'){cur+='"';i++;continue}
+    if(c=='"'){q=!q;continue}
+    if(c==','&&!q){row.push(cur);cur='';continue}
+    if((c=='\n'||c=='\r')&&!q){
+      if(cur||row.length){row.push(cur);rows.push(row);row=[];cur=''}
+      if(c=='\r'&&n=='\n')i++;continue
+    }
+    cur+=c
+  }
+  if(cur||row.length){row.push(cur);rows.push(row)}
+  return rows
+}
 function splitPos(text){
   if(!text||String(text).trim()=='-') return []
   const tt=String(text).trim()
@@ -10,15 +24,16 @@ function splitPos(text){
 
 export default async function handler(req,res){
   res.setHeader('Access-Control-Allow-Origin','*')
+  res.setHeader('Cache-Control','no-store')
   try{
-    const SHEET_ID=process.env.SHEET_ID
-    const gid=req.query.gid||'285923348'
-    if(!SHEET_ID) return res.status(500).json({error:'SHEET_ID belum di-set di Vercel', data:[]})
+    const SHEET_ID = process.env.SHEET_ID
+    const gid = req.query.gid || '285923348'
+    if(!SHEET_ID) return res.status(500).json({error:'SHEET_ID belum di-set', data:[]})
 
-    const url=`https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`
-    const r = await fetch(url) // pakai fetch bawaan Vercel, bukan node-fetch
+    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`
+    const r = await fetch(url)
     const csv = await r.text()
-    const table = Papa.parse(csv,{skipEmptyLines:true}).data
+    const table = parseCSV(csv)
 
     const out=[]
     for(let i=1;i<table.length;i++){
@@ -39,8 +54,8 @@ export default async function handler(req,res){
       pushCell(iconCell,'Icon')
       pushCell(dtpCell,'DTP')
     }
-    res.json({data:out})
+    return res.json({data:out})
   }catch(e){
-    res.status(500).json({error:e.message, data:[]})
+    return res.status(500).json({error:e.message, data:[]})
   }
 }
