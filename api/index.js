@@ -9,6 +9,7 @@ export default async function handler(req, res) {
 
   try {
     const csvUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${GID}`;
+    console.log("csvUrl",csvUrl)
     const response = await fetch(csvUrl);
     const text = await response.text();
 
