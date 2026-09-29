@@ -72,20 +72,38 @@ function splitPos(text){
   return tt.split(/(?=\d+\.\s)/).map(s=>s.trim()).filter(s=>s.length>5)
 }
 
-export default async function handler(req,res){
-  res.setHeader('Access-Control-Allow-Origin','*')
-  const gid=req.query.gid||'285923348'
-  let csvUrl=process.env.SHEET_CSV_URL
-  if(csvUrl &&!csvUrl.includes('gid=')) csvUrl+=`&gid=${gid}&single=true`
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Content-Type', 'application/json');
 
-  try{
-    const r=await fetch(csvUrl)
-    const csv=await r.text()
-    if(csv.trim().startsWith('<')) return res.json({data:[], error:'Publish sheet sebagai CSV spesifik, bukan Entire document'})
+  try {
+    const gid = req.query.gid || '285923348';
+    let csvUrl = process.env.SHEET_CSV_URL;
 
-    const rows=[]; let cur='',row=[],q=false
+    if (!csvUrl) {
+      return res.status(200).json({
+        data: [],
+        error: 'SHEET_CSV_URL belum di set di Vercel Env',
+        hint: 'Vercel Dashboard > Settings > Environment Variables > SHEET_CSV_URL = link publish CSV kamu'
+      });
+    }
+
+    if (!csvUrl.includes('gid=')) {
+      csvUrl += `&gid=${gid}&single=true`;
+    }
+
+    const r = await fetch(csvUrl);
+    if (!r.ok) throw new Error(`Fetch CSV gagal ${r.status}`);
+
+    const csv = await r.text();
+    if (csv.trim().startsWith('<') || csv.includes('<!DOCTYPE')) {
+      return res.status(200).json({ data: [], error: 'CSV masih HTML, publish sheet sebagai CSV spesifik' });
+    }
+
+    // parse
+    const rows=[]; let cur='',row=[],q=false;
     for(let i=0;i<csv.length;i++){
-      let c=csv[i],n=csv[i+1]
+      let c=csv[i],n=csv[i+1];
       if(c=='"'&&q&&n=='"'){cur+='"';i++;continue}
       if(c=='"'){q=!q;continue}
       if(c==','&&!q){row.push(cur);cur='';continue}
@@ -105,34 +123,22 @@ export default async function handler(req,res){
       const parts=txt.split(/(?=\b\d+\.\s)/)
       for(const raw of parts){
         let clean=raw.trim(); if(clean.length<10) continue
-        if(/^\d+\.?$/.test(clean)) continue
         let m=clean.match(/^\d+\.\s*([^\n]+)/)
         let node=m?m[1]:clean.split('\n')[0]
         node=node.split(/Duration/i)[0].trim().replace(/\s+/g,' ').slice(0,120)
         if(node.length<3) continue
-        if(node.toLowerCase().startsWith('rfo :')) continue
         out.push({Tanggal:tgl,"Node/Pos":node,LINK:'Icon',KENDALA:raw.replace(/^\d+\.\s*/,'').slice(0,800).trim()})
       }
     }
 
     const bulan={Jan:0,Feb:1,Mar:2,Apr:3,Mei:4,May:4,Jun:5,Jul:6,Agu:7,Aug:7,Sep:8,Okt:9,Oct:9,Nov:10,Des:11,Dec:11}
-    function parseTgl(s){
-      const m=s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/)
-      if(m) return new Date(+m[3],bulan[m[2]]??0,+m[1])
-      return new Date(0)
-    }
-    function toDayKey(s){
-      const d=parseTgl(s); if(isNaN(d.getTime())) return null
-      return d.toISOString().slice(0,10)
-    }
-    out.sort((a,b)=>{
-      const da=parseTgl(a.Tanggal), db=parseTgl(b.Tanggal)
-      if(db.getTime()-da.getTime()!==0) return db.getTime()-da.getTime()
-      return a["Node/Pos"].localeCompare(b["Node/Pos"])
-    })
+    function parseTgl(s){ const m=s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/); if(m) return new Date(+m[3],bulan[m[2]]??0,+m[1]); return new Date(0) }
+    function toDayKey(s){ const d=parseTgl(s); if(isNaN(d)) return null; return d.toISOString().slice(0,10) }
 
-    const map={}
-    out.forEach(o=>{ const k=o["Node/Pos"]; if(!map[k]) map[k]=[]; map[k].push(o) })
+    out.sort((a,b)=>{ const da=parseTgl(a.Tanggal), db=parseTgl(b.Tanggal); if(db-da!==0) return db-da; return a["Node/Pos"].localeCompare(b["Node/Pos"]) })
+
+    // 3 hari logic
+    const map={}; out.forEach(o=>{ const k=o["Node/Pos"]; if(!map[k]) map[k]=[]; map[k].push(o) })
     let three=[]
     for(const node in map){
       const items=map[node].map(x=>({...x,_day:toDayKey(x.Tanggal)})).filter(x=>x._day).sort((a,b)=>a._day.localeCompare(b._day))
@@ -141,24 +147,18 @@ export default async function handler(req,res){
       if(uniq.length===0) continue
       let streak=[uniq[0]]
       for(let i=1;i<uniq.length;i++){
-        const diff=(new Date(uniq[i]._day).getTime()-new Date(uniq[i-1]._day).getTime())/86400000
-        if(diff===1) streak.push(uniq[i])
-        else{
-          if(streak.length>=3) three.push(...streak)
-          streak=[uniq[i]]
-        }
+        const diff=(new Date(uniq[i]._day)-new Date(uniq[i-1]._day))/86400000
+        if(diff===1) streak.push(uniq[i]); else { if(streak.length>=3) three.push(...streak); streak=[uniq[i]] }
       }
       if(streak.length>=3) three.push(...streak)
     }
-    three.sort((a,b)=>{
-      const da=parseTgl(a.Tanggal), db=parseTgl(b.Tanggal)
-      if(db.getTime()-da.getTime()!==0) return db.getTime()-da.getTime()
-      return a["Node/Pos"].localeCompare(b["Node/Pos"])
-    })
+    three.sort((a,b)=>{ const da=parseTgl(a.Tanggal), db=parseTgl(b.Tanggal); if(db-da!==0) return db-da; return a["Node/Pos"].localeCompare(b["Node/Pos"]) })
 
     const finalData = req.query.filter==='3hari'? three : out
-    return res.json({data:finalData, total:out.length, total3hari:three.length, nodes3hari:[...new Set(three.map(x=>x["Node/Pos"]))]})
-  }catch(e){
-    return res.status(500).json({error:e.message,data:[]})
+    return res.status(200).json({data:finalData, total:out.length, total3hari:three.length})
+
+  } catch (e) {
+    console.error(e)
+    return res.status(200).json({ data: [], error: e.message, stack: String(e).slice(0,500) })
   }
 }
