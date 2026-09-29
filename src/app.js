@@ -1,15 +1,23 @@
-const express = require('express')
-const cors = require('cors')
-const app = express()
+import cors from 'cors'
+import express from 'express'
+import getData from './data/index.js'
 
+const app = express()
 app.use(cors())
 app.use(express.json())
 
-// route kamu yang ada
-app.get('/', (req, res) => res.send('Backend ESDM OK - HIDE ACUAN'))
-app.get('/api/health', (req, res) => res.json({ status: 'ok' }))
+app.get('/api/data', async (req,res)=>{
+  try{
+    const gid = req.query.gid || '285923348'
+    const data = await getData(gid)
+    console.log('API OUT:', data.length)
+    res.json({data})
+  }catch(e){
+    console.error('API ERROR:', e.message)
+    res.status(500).json({error:e.message, data:[]})
+  }
+})
 
-// contoh route data sheet kamu
-// app.use('/api/data', require('./routes/data'))
+app.get('/', (req,res)=> res.json({ok:true}))
 
-module.exports = app
+export default app
