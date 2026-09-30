@@ -115,7 +115,7 @@ export default async function handler(req, res){
     threeRows = threeRows.map(({_date,...rest})=>rest).sort((a,b)=> toDate(b.Tanggal)-toDate(a.Tanggal));
 
     if(filter==="3hari"){
-      return res.json({data: threeRows,url1:url total: all.length, count3hari: nodes3hari.length, count: threeRows.length, nodes3hari});
+      return res.json({data: threeRows, total: all.length, count3hari: nodes3hari.length, count: threeRows.length, nodes3hari});
     }
     // default: balikin SEMUA + metadata
     return res.json({data: all, total: all.length, count3hari: nodes3hari.length, count: all.length, nodes3hari, data3hari: threeRows});
