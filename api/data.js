@@ -1,4 +1,4 @@
-function getProsesKey(node, kendala){
+function getProsesKey(node,kendala){
   const low=(kendala||'').toLowerCase();
   const km=(low.match(/(\d+[.,]?\d*\s*km)/)||[''])[0]||'';
   const pops=[...low.matchAll(/pop\s+([a-z0-9]+)/g)].map(m=>m[1]).join('-');
@@ -51,66 +51,63 @@ export default async function handler(req,res){
     }
     const rows=parseCSV(t);
     let rawOut=[];
-    let lastTgl='', lastNode=''; // bawa tanggal & node sebelumnya
+    let lastTgl='', lastNode='';
     for(let i=1;i<rows.length;i++){
       const rr=rows[i];
-      // tanggal merge (image_a15a10.png)
+      // 1. TANGGAL MERGE - kalau kosong pakai tanggal sebelumnya (fix 16 Sep PATGTL dll)
       let tgl=(rr[0]||'').trim();
       if(!tgl) tgl=lastTgl; else lastTgl=tgl;
       if(!tgl) continue;
 
-      // cari kolom Node & kolom Kendala/RFO di baris ini (gak hardcode rr[5])
+      // 2. CARI NODE & KENDALA DI KOLOM MANAPUN (fix image_fc33d9.png & image_30a856.png)
       let nodeCell='', kendalaCell='';
       for(let c=0;c<rr.length;c++){
         const cell=(rr[c]||'').trim();
-        if(!cell) continue;
-        // Node: ada Pos PGA / PATGTL / Tekmira tapi gak ada Duration/RFO
+        if(!cell || cell.length<2) continue;
         if(/(Pos PGA|PATGTL|Tekmira|PSDM|Pusdatin|BBPMB|Balai)/i.test(cell) &&!/Duration|RFO\s*:/i.test(cell) && cell.length<120){
           if(cell.length>nodeCell.length) nodeCell=cell;
         }
-        // Kendala: ada Duration atau RFO atau km
-        if(/Duration|RFO\s*:|km dari|POP/i.test(cell) && cell.length>10){
+        if(/(Duration|RFO\s*:|km dari|POP|Masih dalam proses)/i.test(cell) && cell.length>10){
           if(cell.length>kendalaCell.length) kendalaCell=cell;
         }
       }
-      // kalau Node kosong kayak image_fc33d9.png 14 Sep cuma RFO, pakai lastNode
+      // kalau RFO doang tanpa Node kayak 14 Sep di image_fc33d9.png, pakai lastNode
       if(nodeCell) lastNode=nodeCell;
       let node=nodeCell||lastNode||'';
-      // kalau cell kendala masih kosong tapi ada cell yang isinya Pos PGA + Duration dalam 1 cell (format lama)
+      // kalau kendala masih kosong tapi ada cell gabungan Pos PGA + Duration dalam 1 cell (format lama)
       if(!kendalaCell){
         for(let c=0;c<rr.length;c++){
           const cell=(rr[c]||'').trim();
-          if(/Pos PGA.*Duration/i.test(cell)){ kendalaCell=cell; if(!node) node=cell.split(/Duration/i)[0].replace(/^\d+\.\s*/,'').trim(); break; }
+          if(/Pos PGA.*Duration/i.test(cell)){ kendalaCell=cell; break; }
         }
       }
-      // untuk image_fc33d9.png: RFO doang tanpa Node, tapi kita sudah punya lastNode
       if(!kendalaCell) continue;
-      if(!node) node=lastNode||'Unknown';
+      if(!node){
+        // coba ambil node dari kendalaCell kalau ada
+        const m=kendalaCell.match(/(Pos PGA[^\n]*|PATGTL[^\n]*|Tekmira[^\n]*|PSDM[^\n]*)/i);
+        if(m) { node=m[1].split(/Duration|RFO/i)[0].trim(); lastNode=node; }
+        else node=lastNode||'Unknown';
+      }
 
       const posList=splitPos(kendalaCell);
-      // kalau kendalaCell cuma RFO tanpa nomor & tanpa Pos PGA (image_fc33d9.png), posList = [RFO]
-      const listToUse = posList.length? posList : [kendalaCell];
-
+      const listToUse=posList.length?posList:[kendalaCell];
       for(const raw of listToUse){
-        let cleanRaw=raw.replace(/^\s*\d+\.\s*/, '').trim();
-        // kalau raw diawali Pos PGA, ambil node dari situ
-        let firstLine=cleanRaw.split('\n')[0].trim();
-        let curNode=firstLine;
-        if(/Pos PGA|PATGTL|Tekmira|PSDM/i.test(firstLine)){
+        let curNode=node;
+        let firstLine=raw.replace(/^\s*\d+\.\s*/,'').split('\n')[0].trim();
+        if(/(Pos PGA|PATGTL|Tekmira|PSDM)/i.test(firstLine)){
           curNode=firstLine.split(/Duration|RFO/i)[0].trim().replace(/\s+/g,' ').slice(0,120);
           if(curNode) { node=curNode; lastNode=curNode; }
         }
         let kendalaBersih=raw.replace(/^\s*\d+\.\s*[^\n]*\n?/, '').trim();
-        // hapus node di awal kendala biar KENDALA tanpa Node (sesuai request)
-        if(curNode && kendalaBersih.toLowerCase().startsWith(curNode.toLowerCase().slice(0,10))){
+        if(curNode && kendalaBersih.toLowerCase().startsWith(curNode.toLowerCase().slice(0,12))){
           kendalaBersih=kendalaBersih.slice(curNode.length).trim();
         }
         if(kendalaBersih.length<5) continue;
-        const prosesKey=getProsesKey(node,kendalaBersih);
-        rawOut.push({Tanggal:tgl, "Node/Pos":node, LINK:'Icon', KENDALA:kendalaBersih.slice(0,1200), _prosesKey:prosesKey});
+        const prosesKey=getProsesKey(curNode||node,kendalaBersih);
+        rawOut.push({Tanggal:tgl, "Node/Pos":curNode||node, LINK:'Icon', KENDALA:kendalaBersih.slice(0,1200), _prosesKey:prosesKey});
       }
     }
-
+    // gabung tanggal+node sama jadi 1 (06 Jul Soputan 2 durasi)
     const grouped={};
     for(let o of rawOut){
       const gkey=o.Tanggal+'||'+o["Node/Pos"];
