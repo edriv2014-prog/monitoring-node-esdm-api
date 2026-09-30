@@ -15,16 +15,24 @@ export default async function handler(req,res){
       const rr=rows[i]; const tgl=(rr[0]||'').trim(); if(!tgl) continue;
       const posList=splitPos(rr[5]);
       for(const raw of posList){
-        let m=raw.match(/^\d+\.\s*([^\n]+)/); let node=m? m[1]: raw.split('\n')[0];
+        let m=raw.match(/^\d+\.\s*([^\n]+)/);
+        let node=m? m[1]: raw.split('\n')[0];
         node=node.split(/Duration/i)[0].trim().replace(/\s+/g,' ').slice(0,120);
         if(node.length<3) continue;
-        // SPLIT PER PROSES (Duration)
-        const prosesParts = raw.split(/(?=Duration\s*:)/i).map(s=>s.trim()).filter(s=>s.length>10);
-        for(const pr of prosesParts){
-          let rfo = (pr.split(/RFO\s*:/i)[1]||pr).toLowerCase().replace(/\s+/g,' ').slice(0,80);
-          const prosesKey = node+"||"+rfo;
-          out.push({Tanggal:tgl, "Node/Pos":node, LINK:'Icon', KENDALA:pr.slice(0,900), _prosesKey:prosesKey, _key:tgl+'||'+node+'||'+rfo.slice(0,30)});
-        }
+
+        // JANGAN SPLIT DURATION - 1 nomor = 1 proses utuh
+        // Contoh raw di image_d645b6.png: "1. Pos PGA Bur Ni Telong\nDuration 1 hari 16 menit...\nRFO...\n\nDuration 1 jam 30 menit..." = 1 BARIS
+        let rfo = (raw.split(/RFO\s*:/i)[1]||raw).toLowerCase().replace(/\s+/g,' ').slice(0,80);
+        const prosesKey = node+"||"+rfo;
+
+        out.push({
+          Tanggal:tgl,
+          "Node/Pos":node,
+          LINK:'Icon',
+          KENDALA:raw.slice(0,900),
+          _prosesKey:prosesKey,
+          _key:tgl+'||'+node+'||'+rfo.slice(0,30)
+        });
       }
     }
     const bulan={Jan:0,Feb:1,Mar:2,Apr:3,Mei:4,May:4,Jun:5,Jul:6,Agu:7,Aug:7,Sep:8,Okt:9,Oct:9,Nov:10,Des:11,Dec:11};
