@@ -3,11 +3,7 @@ function getProsesKey(node, kendala){
   const km=(low.match(/(\d+[.,]?\d*\s*km)/)||[''])[0]||'';
   const pops=[...low.matchAll(/pop\s+([a-z0-9]+)/g)].map(m=>m[1]).join('-');
   const bireun=low.includes('bireun')&&low.includes('takengon')?'bireun-takengon':pops;
-  if(!km &&!bireun){
-    let rfo=(low.split('rfo')[1]||low).slice(0,50);
-    return node+"||"+rfo;
-  }
-  return node+"||"+km+"||"+bireun;
+  return (km||bireun)? node+"||"+km+"||"+bireun : node+"||"+low.slice(0,50);
 }
 function splitPos(tx){
   if(!tx) return [];
@@ -16,7 +12,7 @@ function splitPos(tx){
   let parts=txt.split(/(?=\d+\.\s)/).map(s=>s.trim()).filter(s=>s.length>5);
   let final=[];
   for(let p of parts){
-    let subs=p.split(/\n\s*(?=(Pos PGA|Kampus Diklat|Tekmira|Ditjen|BBPMB|Balai|Pusat|Pusdatin|PSDM))/i);
+    let subs=p.split(/\n\s*(?=(Pos PGA|Kampus Diklat|Tekmira|Ditjen|BBPMB|Balai|Pusat|Pusdatin|PSDM|PATGTL))/i);
     for(let s of subs){ s=s.trim(); if(s.length>10) final.push(s); }
   }
   return final.length?final:[txt];
@@ -29,14 +25,13 @@ export default async function handler(req,res){
   try{
     const gid=req.query.gid||'285923348';
     let csvUrl=process.env.SHEET_CSV_URL||'';
-    if(!csvUrl) throw new Error('SHEET_CSV_URL kosong - cek Vercel Env');
+    if(!csvUrl) throw new Error('SHEET_CSV_URL kosong di Vercel Env');
     if(csvUrl.includes('/edit')){
       const m=csvUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
       if(m) csvUrl=`https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${gid}`;
     }
     if(!csvUrl.includes('gid=')) csvUrl+=(csvUrl.includes('?')?'&':'?')+`gid=${gid}&single=true`;
-    const r=await fetch(csvUrl);
-    if(!r.ok) throw new Error('fetch '+r.status);
+    const r=await fetch(csvUrl); if(!r.ok) throw new Error('fetch '+r.status);
     const t=await r.text();
     function parseCSV(t){
       const rows=[]; let cur='',row=[],q=false;
@@ -56,32 +51,66 @@ export default async function handler(req,res){
     }
     const rows=parseCSV(t);
     let rawOut=[];
-    let lastTgl=''; // <--- FIX 26 Agu-16 Sep hilang (image_a15a10.png)
+    let lastTgl='', lastNode=''; // bawa tanggal & node sebelumnya
     for(let i=1;i<rows.length;i++){
       const rr=rows[i];
+      // tanggal merge (image_a15a10.png)
       let tgl=(rr[0]||'').trim();
-      if(!tgl){ tgl=lastTgl; } else { lastTgl=tgl; } // kalau kosong pakai tanggal sebelumnya
+      if(!tgl) tgl=lastTgl; else lastTgl=tgl;
       if(!tgl) continue;
 
-      // FIX kolom geser: coba rr[5] dulu, kalau kosong coba rr[4] (yang di image_a15a10.png)
-      let cell=rr[5]||rr[4]||'';
-      if(!cell) continue;
+      // cari kolom Node & kolom Kendala/RFO di baris ini (gak hardcode rr[5])
+      let nodeCell='', kendalaCell='';
+      for(let c=0;c<rr.length;c++){
+        const cell=(rr[c]||'').trim();
+        if(!cell) continue;
+        // Node: ada Pos PGA / PATGTL / Tekmira tapi gak ada Duration/RFO
+        if(/(Pos PGA|PATGTL|Tekmira|PSDM|Pusdatin|BBPMB|Balai)/i.test(cell) &&!/Duration|RFO\s*:/i.test(cell) && cell.length<120){
+          if(cell.length>nodeCell.length) nodeCell=cell;
+        }
+        // Kendala: ada Duration atau RFO atau km
+        if(/Duration|RFO\s*:|km dari|POP/i.test(cell) && cell.length>10){
+          if(cell.length>kendalaCell.length) kendalaCell=cell;
+        }
+      }
+      // kalau Node kosong kayak image_fc33d9.png 14 Sep cuma RFO, pakai lastNode
+      if(nodeCell) lastNode=nodeCell;
+      let node=nodeCell||lastNode||'';
+      // kalau cell kendala masih kosong tapi ada cell yang isinya Pos PGA + Duration dalam 1 cell (format lama)
+      if(!kendalaCell){
+        for(let c=0;c<rr.length;c++){
+          const cell=(rr[c]||'').trim();
+          if(/Pos PGA.*Duration/i.test(cell)){ kendalaCell=cell; if(!node) node=cell.split(/Duration/i)[0].replace(/^\d+\.\s*/,'').trim(); break; }
+        }
+      }
+      // untuk image_fc33d9.png: RFO doang tanpa Node, tapi kita sudah punya lastNode
+      if(!kendalaCell) continue;
+      if(!node) node=lastNode||'Unknown';
 
-      const posList=splitPos(cell);
-      for(const raw of posList){
+      const posList=splitPos(kendalaCell);
+      // kalau kendalaCell cuma RFO tanpa nomor & tanpa Pos PGA (image_fc33d9.png), posList = [RFO]
+      const listToUse = posList.length? posList : [kendalaCell];
+
+      for(const raw of listToUse){
         let cleanRaw=raw.replace(/^\s*\d+\.\s*/, '').trim();
+        // kalau raw diawali Pos PGA, ambil node dari situ
         let firstLine=cleanRaw.split('\n')[0].trim();
-        let node=firstLine.split(/Duration/i)[0].trim().replace(/\s+/g,' ').slice(0,120);
-        if(node.length<3) continue;
+        let curNode=firstLine;
+        if(/Pos PGA|PATGTL|Tekmira|PSDM/i.test(firstLine)){
+          curNode=firstLine.split(/Duration|RFO/i)[0].trim().replace(/\s+/g,' ').slice(0,120);
+          if(curNode) { node=curNode; lastNode=curNode; }
+        }
         let kendalaBersih=raw.replace(/^\s*\d+\.\s*[^\n]*\n?/, '').trim();
-        if(kendalaBersih.toLowerCase().startsWith(node.toLowerCase().slice(0,10))){
-          kendalaBersih=kendalaBersih.slice(node.length).trim();
+        // hapus node di awal kendala biar KENDALA tanpa Node (sesuai request)
+        if(curNode && kendalaBersih.toLowerCase().startsWith(curNode.toLowerCase().slice(0,10))){
+          kendalaBersih=kendalaBersih.slice(curNode.length).trim();
         }
         if(kendalaBersih.length<5) continue;
         const prosesKey=getProsesKey(node,kendalaBersih);
         rawOut.push({Tanggal:tgl, "Node/Pos":node, LINK:'Icon', KENDALA:kendalaBersih.slice(0,1200), _prosesKey:prosesKey});
       }
     }
+
     const grouped={};
     for(let o of rawOut){
       const gkey=o.Tanggal+'||'+o["Node/Pos"];
