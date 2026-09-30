@@ -1,17 +1,33 @@
-function getProsesKey(node, kendalaBersih){
-  const low = kendalaBersih.toLowerCase();
-  const kmMatch = low.match(/(\d+[.,]?\d*\s*km)/);
-  const km = kmMatch? kmMatch[1].replace(',','.').trim() : '';
+function getProsesKey(node, kendala){
+  const low = kendala.toLowerCase();
+  const km = (low.match(/(\d+[.,]?\d*\s*km)/)||[''])[0].replace(',','.');
   const pops = [...low.matchAll(/pop\s+([a-z0-9]+)/g)].map(m=>m[1]).join('-');
-  // ambil bireun-takengon juga kalau tanpa POP
-  const bireunTakengon = low.includes('bireun') && low.includes('takengon')? 'bireun-takengon' : pops;
-
-  if(!km &&!bireunTakengon){
-    let rfo = (low.split(/rfo\s*:/)[1]||low).replace(/gangguan|fo cut|pada|jarak|impact|cut over|dan saat ini.*|dan sudah.*/g,'').replace(/\s+/g,' ').trim().slice(0,50);
+  const bireun = low.includes('bireun') && low.includes('takengon')? 'bireun-takengon' : pops;
+  if(!km &&!bireun){
+    let rfo = (low.split(/rfo\s*:/)[1]||low).replace(/gangguan|fo cut|pada|jarak|impact|cut over|dan saat ini.*/g,'').trim().slice(0,50);
     return node+"||"+rfo;
   }
-  return node+"||"+km+"||"+bireunTakengon; // HAPUS TOWER! -> 27 & 26 jadi sama
+  return node+"||"+km+"||"+bireun;
 }
+
+function splitPos(tx){
+  if(!tx || String(tx).trim()=='-') return [];
+  let txt = String(tx).trim();
+  // 1. split nomor 1. 2. 3.
+  let parts = txt.split(/(?=\d+\.\s)/);
+  let out=[];
+  for(let p of parts){
+    // 2. split tanpa nomor: Pos PGA, Kampus, Tekmira, Ditjen, BBPMB
+    // ini yang di image_914f50.png
+    let subs = p.split(/(?=\b(?:Pos PGA|Kampus Diklat|Tekmira|Ditjen Kelistrikan|BBPMB|Balai|Pusat)\b)/);
+    for(let s of subs){
+      s=s.trim();
+      if(s.length>10) out.push(s);
+    }
+  }
+  return out;
+}
+
 export default async function handler(req,res){
   res.setHeader('Access-Control-Allow-Origin','*');
   res.setHeader('Content-Type','application/json');
@@ -23,8 +39,7 @@ export default async function handler(req,res){
     if(!csvUrl.includes('gid=')) csvUrl+=(csvUrl.includes('?')?'&':'?')+`gid=${gid}&single=true`;
     const r=await fetch(csvUrl); const t=await r.text();
     function parseCSV(t){ const rows=[]; let cur='',row=[],q=false; for(let i=0;i<t.length;i++){ let c=t[i],n=t[i+1]; if(c=='"'&&q&&n=='"'){cur+='"';i++;continue} if(c=='"'){q=!q;continue} if(c==','&&!q){row.push(cur);cur='';continue} if((c=='\n'||c=='\r')&&!q){ if(cur||row.length){row.push(cur);rows.push(row);row=[];cur=''} if(c=='\r'&&n=='\n') i++; continue } cur+=c; } if(cur||row.length){row.push(cur);rows.push(row)} return rows; }
-    function splitPos(tx){ if(!tx||String(tx).trim()=='-') return []; return String(tx).trim().split(/(?=\d+\.\s)/).map(s=>s.trim()).filter(s=>s.length>5); }
-    const rows=parseCSV(t); let out=[];
+    const rows=parseCSV(t); let rawOut=[];
     for(let i=1;i<rows.length;i++){
       const rr=rows[i]; const tgl=(rr[0]||'').trim(); if(!tgl) continue;
       const posList=splitPos(rr[5]);
@@ -33,23 +48,30 @@ export default async function handler(req,res){
         let node=m? m[1] : raw.split('\n')[0];
         node=node.split(/Duration/i)[0].trim().replace(/\s+/g,' ').slice(0,120);
         if(node.length<3) continue;
-
-        // HAPUS NO URUT & NODE DI KENDALA (yang kamu minta tadi)
+        // HAPUS nourut & node di kendala
         let kendalaBersih = raw.replace(/^\d+\.\s*[^\n]+\n?/, '').trim();
-        if(kendalaBersih.length < 5) kendalaBersih = raw.slice(0,900);
-
-        const prosesKey = getProsesKey(node, kendalaBersih);
-
-        out.push({
-          Tanggal:tgl,
-          "Node/Pos":node,
-          LINK:'Icon',
-          KENDALA:kendalaBersih.slice(0,900),
-          _prosesKey:prosesKey,
-          _key:tgl+'||'+node+'||'+prosesKey
-        });
+        kendalaBersih = kendalaBersih.replace(new RegExp('^'+node.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\s*\\n?','i'),'').trim();
+        if(kendalaBersih.length<5) kendalaBersih=raw.slice(0,900);
+        const prosesKey=getProsesKey(node,kendalaBersih);
+        rawOut.push({Tanggal:tgl, "Node/Pos":node, LINK:'Icon', KENDALA:kendalaBersih.slice(0,900), _prosesKey:prosesKey});
       }
     }
+    // GABUNG tanggal+node yang sama (image_e5ac8d.png 06 Jul Soputan 2 durasi jadi 1)
+    const grouped={};
+    for(let o of rawOut){
+      const gkey=o.Tanggal+'||'+o["Node/Pos"];
+      if(!grouped[gkey]) grouped[gkey]={...o, KENDALA:o.KENDALA, _prosesKey:o._prosesKey, _keys:[o._prosesKey]};
+      else{
+        grouped[gkey].KENDALA += '\n\n'+o.KENDALA;
+        grouped[gkey]._keys.push(o._prosesKey);
+      }
+    }
+    let out=Object.values(grouped).map(o=>{
+      const keyFinal=o._prosesKey; // pakai yang pertama untuk streak
+      const _key=o.Tanggal+'||'+o["Node/Pos"]+'||'+keyFinal;
+      return {...o, _key, _prosesKey:keyFinal};
+    });
+
     const bulan={Jan:0,Feb:1,Mar:2,Apr:3,Mei:4,May:4,Jun:5,Jul:6,Agu:7,Aug:7,Sep:8,Okt:9,Oct:9,Nov:10,Des:11,Dec:11};
     const toDayKey=d=>{ const m=d.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/); return m? new Date(+m[3],bulan[m[2]]??0,+m[1]).toISOString().slice(0,10):null; };
     const parseTgl=s=>{ const m=s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/); return m? new Date(+m[3],bulan[m[2]]??0,+m[1]):new Date(0); };
@@ -57,7 +79,7 @@ export default async function handler(req,res){
     let result3H=[]; let nodes3H=new Set(); let keys3H=new Set();
     for(const k in map){
       const uniq=[...new Set(map[k].map(x=>x._day))].sort();
-      if(uniq.length<3) continue;
+      if(uniq.length<3) continue; // 2H gak masuk!
       let streak=[uniq[0]];
       for(let i=1;i<=uniq.length;i++){
         const isLast=i===uniq.length; const diff=!isLast? (new Date(uniq[i])-new Date(uniq[i-1]))/86400000 : 999;
@@ -65,12 +87,12 @@ export default async function handler(req,res){
         else{ if(streak.length>=3){ map[k].forEach(row=>{ if(streak.includes(row._day)){ result3H.push(row); keys3H.add(row._key); nodes3H.add(row["Node/Pos"]); } }); } if(!isLast) streak=[uniq[i]]; }
       }
     }
-    const clean=arr=>arr.map(({_day,_prosesKey,_key,...r})=>r).sort((a,b)=> parseTgl(b.Tanggal)-parseTgl(a.Tanggal));
+    const clean=arr=>arr.map(({_day,_prosesKey,_keys,...r})=>r).sort((a,b)=> parseTgl(b.Tanggal)-parseTgl(a.Tanggal));
     return res.json({
       data: req.query.filter==='3hari'? clean(result3H) : clean(out),
       total: out.length, total3H: result3H.length, totalTidak3H: out.length-result3H.length,
       count: req.query.filter==='3hari'? result3H.length : out.length, count3hari: nodes3H.size,
       nodes3hari:[...nodes3H], keys3hari:[...keys3H]
     });
-  }catch(e){ return res.json({data:[], total:0, total3H:0, totalTidak3H:0, count3hari:0, nodes3hari:[], error:e.message}); }
+  }catch(e){ return res.json({data:[], total:0, total3H:0, totalTidak3H:0, count3hari:0, nodes3hari:[], keys3hari:[], error:e.message}); }
 }
