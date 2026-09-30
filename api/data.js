@@ -1,4 +1,3 @@
-JavaScript
 function getProsesKey(node, kendalaBersih){
   const low = kendalaBersih.toLowerCase();
   // ambil km
