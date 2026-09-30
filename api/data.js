@@ -1,5 +1,5 @@
 // api/data.js - FINAL BERSIH
-/*
+/**/
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json');
@@ -59,8 +59,8 @@ export default async function handler(req, res) {
 }
 function parseCSV(t){ const rows=[]; let cur='',row=[],q=false; for(let i=0;i<t.length;i++){ let c=t[i],n=t[i+1]; if(c=='"'&&q&&n=='"'){cur+='"';i++;continue} if(c=='"'){q=!q;continue} if(c==','&&!q){row.push(cur);cur='';continue} if((c=='\n'||c=='\r')&&!q){ if(cur||row.length){row.push(cur);rows.push(row);row=[];cur=''} if(c=='\r'&&n=='\n') i++; continue } cur+=c; } if(cur||row.length){row.push(cur);rows.push(row)} return rows; }
 function splitPos(text){ if(!text||String(text).trim()=='-') return []; const tt=String(text).trim(); if(tt.length<4) return []; return tt.split(/(?=\d+\.\s)/).map(s=>s.trim()).filter(s=>s.length>5); }
-*/
-/**/
+
+/*
 export default async function handler(req, res){
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
