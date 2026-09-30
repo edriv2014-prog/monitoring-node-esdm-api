@@ -1,21 +1,17 @@
 JavaScript
 function getProsesKey(node, kendalaBersih){
   const low = kendalaBersih.toLowerCase();
-  // ambil km
   const kmMatch = low.match(/(\d+[.,]?\d*\s*km)/);
   const km = kmMatch? kmMatch[1].replace(',','.').trim() : '';
-  // ambil semua POP
-  const pops = [...low.matchAll(/pop\s+([a-z]+)/g)].map(m=>m[1]).join('-');
-  // ambil tower / JB kalau ada
-  const towerMatch = low.match(/(jb|tower)\s*(\d+|[\w]+)/);
-  const tower = towerMatch? towerMatch[0] : '';
+  const pops = [...low.matchAll(/pop\s+([a-z0-9]+)/g)].map(m=>m[1]).join('-');
+  // ambil bireun-takengon juga kalau tanpa POP
+  const bireunTakengon = low.includes('bireun') && low.includes('takengon')? 'bireun-takengon' : pops;
 
-  // kalau gak ada km & pop, fallback ke 40 char pertama RFO yang dinormalisasi
-  if(!km &&!pops){
-    let rfo = (low.split(/rfo\s*:/)[1]||low).replace(/gangguan|fo cut|pada|jarak|impact|cut over|dan saat ini.*|dan sudah.*|pemindahan/g,'').replace(/\s+/g,' ').trim().slice(0,50);
+  if(!km &&!bireunTakengon){
+    let rfo = (low.split(/rfo\s*:/)[1]||low).replace(/gangguan|fo cut|pada|jarak|impact|cut over|dan saat ini.*|dan sudah.*/g,'').replace(/\s+/g,' ').trim().slice(0,50);
     return node+"||"+rfo;
   }
-  return node+"||"+km+"||"+pops+"||"+tower; // contoh: Pos PGA Bur Ni Telong||3.7 km||bireun-takengon||jb tower 171
+  return node+"||"+km+"||"+bireunTakengon; // HAPUS TOWER! -> 27 & 26 jadi sama
 }
 export default async function handler(req,res){
   res.setHeader('Access-Control-Allow-Origin','*');
