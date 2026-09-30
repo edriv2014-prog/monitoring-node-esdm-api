@@ -122,7 +122,7 @@ export default async function handler(req,res){
 
     const r = await fetch(csvUrl);
     const t = await r.text();
-R    // Kalau ke-fetch HTML login, bukan CSV
+    // Kalau ke-fetch HTML login, bukan CSV
     if(t.includes('<html') || t.includes('Sign in') || t.length < 100){
       return res.status(200).json({ data: [], total:0, count3hari:0, nodes3hari:[], error: "Sheet belum Publish! Publish to web dulu. Dapat: "+t.slice(0,150) });
     }
