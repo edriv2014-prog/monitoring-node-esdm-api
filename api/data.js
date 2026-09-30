@@ -1,5 +1,5 @@
 // api/data.js - FINAL BERSIH
-/**/
+/*
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json');
@@ -59,8 +59,8 @@ export default async function handler(req, res) {
 }
 function parseCSV(t){ const rows=[]; let cur='',row=[],q=false; for(let i=0;i<t.length;i++){ let c=t[i],n=t[i+1]; if(c=='"'&&q&&n=='"'){cur+='"';i++;continue} if(c=='"'){q=!q;continue} if(c==','&&!q){row.push(cur);cur='';continue} if((c=='\n'||c=='\r')&&!q){ if(cur||row.length){row.push(cur);rows.push(row);row=[];cur=''} if(c=='\r'&&n=='\n') i++; continue } cur+=c; } if(cur||row.length){row.push(cur);rows.push(row)} return rows; }
 function splitPos(text){ if(!text||String(text).trim()=='-') return []; const tt=String(text).trim(); if(tt.length<4) return []; return tt.split(/(?=\d+\.\s)/).map(s=>s.trim()).filter(s=>s.length>5); }
+*/
 
-/*
 export default async function handler(req, res){
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
@@ -115,12 +115,11 @@ export default async function handler(req, res){
     threeRows = threeRows.map(({_date,...rest})=>rest).sort((a,b)=> toDate(b.Tanggal)-toDate(a.Tanggal));
 
     if(filter==="3hari"){
-      return res.json({data: threeRows,url1:url, total: all.length, count3hari: nodes3hari.length, count: threeRows.length, nodes3hari});
+      return res.json({data: threeRows,url1:url total: all.length, count3hari: nodes3hari.length, count: threeRows.length, nodes3hari});
     }
     // default: balikin SEMUA + metadata
-    return res.json({data: all,url1:url, total: all.length, count3hari: nodes3hari.length, count: all.length, nodes3hari, data3hari: threeRows});
+    return res.json({data: all, total: all.length, count3hari: nodes3hari.length, count: all.length, nodes3hari, data3hari: threeRows});
   }catch(e){
-    return res.status(500).json({data:[],url1:url, total:0, count3hari:0, nodes3hari:[], error:e.message});
+    return res.status(500).json({data:[], total:0, count3hari:0, nodes3hari:[], error:e.message});
   }
 }
-/* */
