@@ -34,22 +34,23 @@ export default async function handler(req,res){
       const posList=splitPos(rr[5]);
       for(const raw of posList){
         let m=raw.match(/^\d+\.\s*([^\n]+)/);
-        let node=m? m[1]: raw.split('\n')[0];
+        let node=m? m[1] : raw.split('\n')[0];
         node=node.split(/Duration/i)[0].trim().replace(/\s+/g,' ').slice(0,120);
         if(node.length<3) continue;
 
-        // JANGAN SPLIT DURATION - 1 nomor = 1 proses utuh
-        // Contoh raw di image_d645b6.png: "1. Pos PGA Bur Ni Telong\nDuration 1 hari 16 menit...\nRFO...\n\nDuration 1 jam 30 menit..." = 1 BARIS
-        let rfo = (raw.split(/RFO\s*:/i)[1]||raw).toLowerCase().replace(/\s+/g,' ').slice(0,80);
-        const prosesKey = node+"||"+rfo;
+        // HAPUS NO URUT & NODE DI KENDALA (yang kamu minta tadi)
+        let kendalaBersih = raw.replace(/^\d+\.\s*[^\n]+\n?/, '').trim();
+        if(kendalaBersih.length < 5) kendalaBersih = raw.slice(0,900);
+
+        const prosesKey = getProsesKey(node, kendalaBersih);
 
         out.push({
           Tanggal:tgl,
           "Node/Pos":node,
           LINK:'Icon',
-          KENDALA:raw.slice(0,900),
+          KENDALA:kendalaBersih.slice(0,900),
           _prosesKey:prosesKey,
-          _key:tgl+'||'+node+'||'+rfo.slice(0,30)
+          _key:tgl+'||'+node+'||'+prosesKey
         });
       }
     }
