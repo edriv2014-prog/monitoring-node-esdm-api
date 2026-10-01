@@ -17,6 +17,29 @@ function splitPos(tx){
   }
   return final.length?final:[txt];
 }
+// hitung selisih hari dari Duration Tgl 10/09/2026 14.50 - saat ini
+function isLongDuration(tglLaporan, kendala){
+  try{
+    const bulan={Jan:0,Feb:1,Mar:2,Apr:3,Mei:4,May:4,Jun:5,Jul:6,Agu:7,Aug:7,Sep:8,Okt:9,Oct:9,Nov:10,Des:11,Dec:11};
+    const parseTglLaporan=s=>{const m=s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/); return m? new Date(+m[3],bulan[m[2]]??0,+m[1]):null;};
+    const laporanDate=parseTglLaporan(tglLaporan);
+    if(!laporanDate) return false;
+    if(!/saat ini/i.test(kendala)) return false;
+    // cari semua Tgl 10/09/2026 atau 27/8/2026
+    const re=/Tgl\s*(\d{1,2})\/(\d{1,2})\/(\d{4})|(\d{1,2})\/(\d{1,2})\/(\d{4})\s+\d{1,2}[.:]\d{2}/gi;
+    let m; let minStart=null;
+    while((m=re.exec(kendala))!==null){
+      let d,mn,y;
+      if(m[1]){ d=+m[1]; mn=+m[2]-1; y=+m[3]; }
+      else { d=+m[4]; mn=+m[5]-1; y=+m[6]; }
+      const start=new Date(y,mn,d);
+      if(!minStart || start<minStart) minStart=start;
+    }
+    if(!minStart) return false;
+    const diff=(laporanDate - minStart)/86400000;
+    return diff>=2; // 10 Sep -> 13 Sep = 3 hari => 3H+
+  }catch{ return false; }
+}
 
 export default async function handler(req,res){
   res.setHeader('Access-Control-Allow-Origin','*');
@@ -25,92 +48,72 @@ export default async function handler(req,res){
   try{
     const gid=req.query.gid||'285923348';
     let csvUrl=process.env.SHEET_CSV_URL||'';
-    if(!csvUrl) throw new Error('SHEET_CSV_URL kosong di Vercel Env');
+    if(!csvUrl) throw new Error('SHEET_CSV_URL kosong');
     if(csvUrl.includes('/edit')){
-      const m=csvUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
-      if(m) csvUrl=`https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${gid}`;
+      const mm=csvUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      if(mm) csvUrl=`https://docs.google.com/spreadsheets/d/${mm[1]}/export?format=csv&gid=${gid}`;
     }
     if(!csvUrl.includes('gid=')) csvUrl+=(csvUrl.includes('?')?'&':'?')+`gid=${gid}&single=true`;
     const r=await fetch(csvUrl); if(!r.ok) throw new Error('fetch '+r.status);
     const t=await r.text();
-    function parseCSV(t){
-      const rows=[]; let cur='',row=[],q=false;
-      for(let i=0;i<t.length;i++){
-        let c=t[i],n=t[i+1];
-        if(c=='"'&&q&&n=='"'){cur+='"';i++;continue}
-        if(c=='"'){q=!q;continue}
-        if(c==','&&!q){row.push(cur);cur='';continue}
-        if((c=='\n'||c=='\r')&&!q){
-          if(cur||row.length){row.push(cur);rows.push(row);row=[];cur=''}
-          if(c=='\r'&&n=='\n') i++; continue
-        }
-        cur+=c;
-      }
-      if(cur||row.length){row.push(cur);rows.push(row)}
-      return rows;
-    }
+    function parseCSV(t){const rows=[];let cur='',row=[],q=false;for(let i=0;i<t.length;i++){let c=t[i],n=t[i+1];if(c=='"'&&q&&n=='"'){cur+='"';i++;continue}if(c=='"'){q=!q;continue}if(c==','&&!q){row.push(cur);cur='';continue}if((c=='\n'||c=='\r')&&!q){if(cur||row.length){row.push(cur);rows.push(row);row=[];cur=''}if(c=='\r'&&n=='\n') i++;continue}cur+=c;}if(cur||row.length){row.push(cur);rows.push(row)}return rows;}
     const rows=parseCSV(t);
-    let rawOut=[];
-    let lastTgl='', lastNode='';
+    let rawOut=[]; let lastTgl='', lastNode='';
     for(let i=1;i<rows.length;i++){
       const rr=rows[i];
-      // 1. TANGGAL MERGE - kalau kosong pakai tanggal sebelumnya (fix 16 Sep PATGTL dll)
-      let tgl=(rr[0]||'').trim();
-      if(!tgl) tgl=lastTgl; else lastTgl=tgl;
-      if(!tgl) continue;
-
-      // 2. CARI NODE & KENDALA DI KOLOM MANAPUN (fix image_fc33d9.png & image_30a856.png)
-      // cari kolom Node & kolom Kendala
+      let tgl=(rr[0]||'').trim(); if(!tgl) tgl=lastTgl; else lastTgl=tgl; if(!tgl) continue;
       let nodeCell='', kendalaCell='';
       for(let c=0;c<rr.length;c++){
-        const cell=(rr[c]||'').trim();
-        if(!cell) continue;
-        if(/(Pos PGA|PATGTL|Tekmira|PSDM|Pusdatin|BBPMB|Balai)/i.test(cell) &&!/Duration|RFO\s*:/i.test(cell) && cell.length<120){
-          // HAPUS NO URUT DI SINI!
-          let cleanNode = cell.replace(/^\s*\d+\.\s*/, '').trim(); // 1. BBP MB -> BBP MB
+        const cell=(rr[c]||'').trim(); if(!cell) continue;
+        if(/(Pos PGA|PATGTL|Tekmira|PSDM|Pusdatin|BBPMB|Balai|node\s*\()/i.test(cell) &&!/Duration|RFO\s*:/i.test(cell) && cell.length<200){
+          let cleanNode=cell.replace(/^\s*\d+\.\s*/, '').trim(); // hapus 1. 2. (image_b4aa6c.png)
           if(cleanNode.length>nodeCell.length) nodeCell=cleanNode;
         }
         if(/(Duration|RFO\s*:|km dari|POP|Masih dalam proses)/i.test(cell) && cell.length>10){
           if(cell.length>kendalaCell.length) kendalaCell=cell;
         }
       }
-      // kalau RFO doang tanpa Node kayak 14 Sep di image_fc33d9.png, pakai lastNode
       if(nodeCell) lastNode=nodeCell;
       let node=nodeCell||lastNode||'';
-      // kalau kendala masih kosong tapi ada cell gabungan Pos PGA + Duration dalam 1 cell (format lama)
       if(!kendalaCell){
-        for(let c=0;c<rr.length;c++){
-          const cell=(rr[c]||'').trim();
-          if(/Pos PGA.*Duration/i.test(cell)){ kendalaCell=cell; break; }
-        }
+        for(let c=0;c<rr.length;c++){const cell=(rr[c]||'').trim(); if(/Pos PGA.*Duration/i.test(cell)){kendalaCell=cell; break;}}
       }
       if(!kendalaCell) continue;
       if(!node){
-        // coba ambil node dari kendalaCell kalau ada
         const m=kendalaCell.match(/(Pos PGA[^\n]*|PATGTL[^\n]*|Tekmira[^\n]*|PSDM[^\n]*)/i);
-        if(m) { node=m[1].split(/Duration|RFO/i)[0].trim(); lastNode=node; }
-        else node=lastNode||'Unknown';
+        if(m){ node=m[1].split(/Duration|RFO/i)[0].trim(); lastNode=node; } else node=lastNode||'Unknown';
+      }
+      // FIX 3 NODE (PPSDM Geominerba, Tekmira Bandung, PEP Bandung) -> split jadi 3
+      let nodesToCreate=[node];
+      const mNode=node.match(/(\d+)\s*node\s*\(([^)]+)\)/i);
+      if(mNode){
+        nodesToCreate=mNode[2].split(',').map(s=>s.trim().replace(/^\d+\.\s*/,'')).filter(Boolean);
+      } else if(node.toLowerCase().includes('3 node')){
+        const inside=node.match(/\(([^)]+)\)/);
+        if(inside) nodesToCreate=inside[1].split(',').map(s=>s.trim().replace(/^\d+\.\s*/,'')).filter(Boolean);
       }
 
       const posList=splitPos(kendalaCell);
       const listToUse=posList.length?posList:[kendalaCell];
-      for(const raw of listToUse){
-        let curNode=node;
-        let firstLine=raw.replace(/^\s*\d+\.\s*/,'').split('\n')[0].trim();
-        if(/(Pos PGA|PATGTL|Tekmira|PSDM)/i.test(firstLine)){
-          curNode=firstLine.split(/Duration|RFO/i)[0].trim().replace(/\s+/g,' ').slice(0,120);
-          if(curNode) { node=curNode; lastNode=curNode; }
+      for(let curNodeName of nodesToCreate){
+        curNodeName=curNodeName.replace(/^\s*\d+\.\s*/, '').trim(); // hapus nourut
+        for(const raw of listToUse){
+          let firstLine=raw.replace(/^\s*\d+\.\s*/,'').split('\n')[0].trim();
+          let curNode=curNodeName;
+          if(/(Pos PGA|PATGTL|Tekmira|PSDM)/i.test(firstLine) &&!/^\d+\s*node/i.test(firstLine)){
+            const extracted=firstLine.split(/Duration|RFO/i)[0].trim().replace(/\s+/g,' ').slice(0,120).replace(/^\s*\d+\.\s*/,'');
+            if(extracted) curNode=extracted;
+          }
+          let kendalaBersih=raw.replace(/^\s*\d+\.\s*[^\n]*\n?/, '').trim();
+          if(curNode && kendalaBersih.toLowerCase().startsWith(curNode.toLowerCase().slice(0,12))){
+            kendalaBersih=kendalaBersih.slice(curNode.length).trim();
+          }
+          if(kendalaBersih.length<5) continue;
+          const prosesKey=getProsesKey(curNode,kendalaBersih);
+          rawOut.push({Tanggal:tgl, "Node/Pos":curNode, LINK:'Icon', KENDALA:kendalaBersih.slice(0,1200), _prosesKey:prosesKey});
         }
-        let kendalaBersih=raw.replace(/^\s*\d+\.\s*[^\n]*\n?/, '').trim();
-        if(curNode && kendalaBersih.toLowerCase().startsWith(curNode.toLowerCase().slice(0,12))){
-          kendalaBersih=kendalaBersih.slice(curNode.length).trim();
-        }
-        if(kendalaBersih.length<5) continue;
-        const prosesKey=getProsesKey(curNode||node,kendalaBersih);
-        rawOut.push({Tanggal:tgl, "Node/Pos":curNode||node, LINK:'Icon', KENDALA:kendalaBersih.slice(0,1200), _prosesKey:prosesKey});
       }
     }
-    // gabung tanggal+node sama jadi 1 (06 Jul Soputan 2 durasi)
     const grouped={};
     for(let o of rawOut){
       const gkey=o.Tanggal+'||'+o["Node/Pos"];
@@ -123,6 +126,7 @@ export default async function handler(req,res){
     const parseTgl=s=>{const m=s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/); return m? new Date(+m[3],bulan[m[2]]??0,+m[1]):new Date(0);};
     const map={}; out.forEach(o=>{const day=toDayKey(o.Tanggal); if(!day) return; if(!map[o._prosesKey]) map[o._prosesKey]=[]; map[o._prosesKey].push({...o,_day:day});});
     let result3H=[]; let nodes3H=new Set(); let keys3H=new Set();
+    // 1. yang 3 hari berurutan
     for(const k in map){
       const uniq=[...new Set(map[k].map(x=>x._day))].sort();
       if(uniq.length<3) continue;
@@ -131,6 +135,12 @@ export default async function handler(req,res){
         const isLast=i===uniq.length; const diff=!isLast? (new Date(uniq[i])-new Date(uniq[i-1]))/86400000 : 999;
         if(!isLast && diff===1) streak.push(uniq[i]);
         else{ if(streak.length>=3){ map[k].forEach(row=>{ if(streak.includes(row._day)){ result3H.push(row); keys3H.add(row._key); nodes3H.add(row["Node/Pos"]); } }); } if(!isLast) streak=[uniq[i]]; }
+      }
+    }
+    // 2. yang Duration Tgl 10/09/2026 - saat ini sampai 13 Sep (kasus kamu)
+    for(let o of out){
+      if(isLongDuration(o.Tanggal, o.KENDALA)){
+        if(!keys3H.has(o._key)){ result3H.push(o); keys3H.add(o._key); nodes3H.add(o["Node/Pos"]); }
       }
     }
     const clean=arr=>arr.map(({_day,_prosesKey,...r})=>r).sort((a,b)=> parseTgl(b.Tanggal)-parseTgl(a.Tanggal));
