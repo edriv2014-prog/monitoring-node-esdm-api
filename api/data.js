@@ -41,42 +41,56 @@ export default async function handler(req,res){
       let parts=txt.split(/(?=\d+\.\s)/).map(s=>s.trim()).filter(s=>s.length>5);
       return parts.length?parts:[txt];
     };
-    for(let i=1;i<rows.length;i++){
+        for(let i=1;i<rows.length;i++){
       try{
         const rr=rows[i]; if(!rr) continue;
         let tgl=(rr[0]||'').trim(); if(!tgl) tgl=lastTgl; else lastTgl=tgl; if(!tgl) continue;
-        let nodeCell='', kendalaCell='';
+
+        // cari CELL terbesar yang ada Duration (itu isinya semua node)
+        let bigCell='';
         for(let c=0;c<rr.length;c++){
-          const cell=(rr[c]||'').trim(); if(!cell) continue;
-          if(/(Pos PGA|PATGTL|Tekmira|PSDM|Pusdatin|BBPMB|Balai|node)/i.test(cell) &&!/Duration|RFO\s*:/i.test(cell) && cell.length<200){
-            let cn=cell.replace(/^\s*\d+\.\s*/,'').trim();
-            if(cn.length>nodeCell.length) nodeCell=cn;
-          }
-          if(/(Duration|RFO\s*:|km dari|POP|Masih dalam)/i.test(cell) && cell.length>10){
-            if(cell.length>kendalaCell.length) kendalaCell=cell;
-          }
+          const cell=(rr[c]||'').trim();
+          if(cell.length>bigCell.length && /(Duration|RFO)/i.test(cell)) bigCell=cell;
         }
-        if(nodeCell) lastNode=nodeCell;
-        let node=nodeCell||lastNode||'Unknown';
-        if(!kendalaCell) continue;
-        let nodesToCreate=[node.replace(/^\s*\d+\.\s*/,'').trim()];
-        const mNode=node.match(/(\d+)\s*node\s*\(([^)]+)\)/i);
-        if(mNode){ nodesToCreate=mNode[2].split(',').map(s=>s.trim().replace(/^\s*\d+\.\s*/,'')).filter(Boolean); }
-        else if(node.toLowerCase().includes('node') && node.includes('(')){
-          const ins=node.match(/\(([^)]+)\)/); if(ins) nodesToCreate=ins[1].split(',').map(s=>s.trim().replace(/^\s*\d+\.\s*/,'')).filter(Boolean);
-        }
-        const posList=splitPos(kendalaCell);
-        const listToUse=posList.length?posList:[kendalaCell];
-        for(let curNodeName of nodesToCreate){
-          curNodeName=curNodeName.replace(/^\s*\d+\.\s*/,'').trim();
-          for(const raw of listToUse){
-            try{
-              let kb=raw.replace(/^\s*\d+\.\s*[^\n]*\n?/, '').trim();
-              if(curNodeName && kb.toLowerCase().startsWith(curNodeName.toLowerCase().slice(0,10))) kb=kb.slice(curNodeName.length).trim();
-              if(kb.length<5) continue;
-              rawOut.push({Tanggal:tgl, "Node/Pos":curNodeName, LINK:'Icon', KENDALA:kb.slice(0,1200), _prosesKey:getKey(curNodeName,kb)});
-            }catch{}
-          }
+        if(!bigCell) continue;
+
+        // SPLIT berdasarkan 1. 2. 3. -> biar gak Unknown
+        const parts = bigCell.split(/(?=\n?\s*\d+\.\s*)/).map(s=>s.trim()).filter(s=>s.length>10);
+        const listToUse = parts.length? parts : [bigCell];
+
+        for(const raw of listToUse){
+          try{
+            const lines = raw.trim().split('\n').map(s=>s.trim()).filter(Boolean);
+            if(!lines.length) continue;
+            // baris pertama = nama node (hapus 1. )
+            let nodeName = lines[0].replace(/^\s*\d+\.\s*/,'').trim();
+            // kalau baris pertama masih Duration, berarti ini lanjutan RFO, ambil lastNode
+            if(/^(Duration|RFO)/i.test(nodeName)){
+              nodeName = lastNode || 'Unknown';
+            } else {
+              // ini node baru, simpan
+              lastNode = nodeName;
+            }
+
+            // hapus nourut 1. 2. dari Node/Pos
+            nodeName = nodeName.replace(/^\s*\d+\.\s*/,'').trim().split(/Duration|RFO/i)[0].trim();
+            if(nodeName.length<3) continue;
+
+            // KENDALA = sisa baris setelah nama node
+            let kendala = raw.replace(/^\s*\d+\.\s*[^\n]*\n?/,'').trim();
+            if(kendala.length<5) kendala = lines.slice(1).join('\n');
+
+            // handle 3 node (PPSDM Geominerba, Tekmira Bandung, PEP Bandung)
+            let nodesToCreate=[nodeName];
+            const mNode=nodeName.match(/(\d+)\s*node\s*\(([^)]+)\)/i);
+            if(mNode){ nodesToCreate=mNode[2].split(',').map(s=>s.trim().replace(/^\s*\d+\.\s*/,'')).filter(Boolean); }
+
+            for(let cur of nodesToCreate){
+              cur = cur.replace(/^\s*\d+\.\s*/,'').trim();
+              if(cur.length<3) continue;
+              rawOut.push({Tanggal:tgl, "Node/Pos":cur, LINK:'Icon', KENDALA:kendala.slice(0,1200), _prosesKey:getKey(cur,kendala)});
+            }
+          }catch{}
         }
       }catch{}
     }
