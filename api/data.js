@@ -1,44 +1,3 @@
-function getProsesKey(node,kendala){
-  const low=(kendala||'').toLowerCase();
-  const km=(low.match(/(\d+[.,]?\d*\s*km)/)||[''])[0]||'';
-  const pops=[...low.matchAll(/pop\s+([a-z0-9]+)/g)].map(m=>m[1]).join('-');
-  const bireun=low.includes('bireun')&&low.includes('takengon')?'bireun-takengon':pops;
-  return (km||bireun)? node+"||"+km+"||"+bireun : node+"||"+low.slice(0,50);
-}
-function splitPos(tx){
-  if(!tx) return [];
-  let txt=String(tx).trim();
-  if(txt==='-'||txt.length<5) return [];
-  let parts=txt.split(/(?=\d+\.\s)/).map(s=>s.trim()).filter(s=>s.length>5);
-  let final=[];
-  for(let p of parts){
-    let subs=p.split(/\n\s*(?=(Pos PGA|Kampus Diklat|Tekmira|Ditjen|BBPMB|Balai|Pusat|Pusdatin|PSDM|PATGTL))/i);
-    for(let s of subs){ s=s.trim(); if(s.length>10) final.push(s); }
-  }
-  return final.length?final:[txt];
-}
-function isLongDuration(tglLaporan, kendala){
-  try{
-    const bulan={Jan:0,Feb:1,Mar:2,Apr:3,Mei:4,May:4,Jun:5,Jul:6,Agu:7,Aug:7,Sep:8,Okt:9,Oct:9,Nov:10,Des:11,Dec:11};
-    const parseTglLaporan=s=>{const m=s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/); return m? new Date(+m[3],bulan[m[2]]??0,+m[1]):null;};
-    const laporanDate=parseTglLaporan(tglLaporan);
-    if(!laporanDate) return false;
-    if(!/saat ini/i.test(kendala)) return false;
-    const re=/Tgl\s*(\d{1,2})\/(\d{1,2})\/(\d{4})|(\d{1,2})\/(\d{1,2})\/(\d{4})\s+\d{1,2}[.:]\d{2}/gi;
-    let m; let minStart=null;
-    while((m=re.exec(kendala))!==null){
-      let d,mn,y;
-      if(m[1]){ d=+m[1]; mn=+m[2]-1; y=+m[3]; }
-      else { d=+m[4]; mn=+m[5]-1; y=+m[6]; }
-      const start=new Date(y,mn,d);
-      if(!minStart || start<minStart) minStart=start;
-    }
-    if(!minStart) return false;
-    const diff=(laporanDate - minStart)/86400000;
-    return diff>=2;
-  }catch{ return false; }
-}
-
 export default async function handler(req,res){
   res.setHeader('Access-Control-Allow-Origin','*');
   res.setHeader('Content-Type','application/json');
@@ -46,18 +5,18 @@ export default async function handler(req,res){
   try{
     const gid=req.query.gid||'285923348';
     let csvUrl=process.env.SHEET_CSV_URL||'';
-    if(!csvUrl) throw new Error('SHEET_CSV_URL kosong di Vercel Env');
+    if(!csvUrl) throw new Error('SHEET_CSV_URL kosong');
     if(csvUrl.includes('/edit')){
-      const mm=csvUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
-      if(mm) csvUrl=`https://docs.google.com/spreadsheets/d/${mm[1]}/export?format=csv&gid=${gid}`;
+      const m=csvUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      if(m) csvUrl=`https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${gid}`;
     }
     if(!csvUrl.includes('gid=')) csvUrl+=(csvUrl.includes('?')?'&':'?')+`gid=${gid}&single=true`;
     const r=await fetch(csvUrl); if(!r.ok) throw new Error('fetch '+r.status);
     const t=await r.text();
-    function parseCSV(t){
+    function parseCSV(txt){
       const rows=[];let cur='',row=[],q=false;
-      for(let i=0;i<t.length;i++){
-        let c=t[i],n=t[i+1];
+      for(let i=0;i<txt.length;i++){
+        let c=txt[i],n=txt[i+1];
         if(c=='"'&&q&&n=='"'){cur+='"';i++;continue}
         if(c=='"'){q=!q;continue}
         if(c==','&&!q){row.push(cur);cur='';continue}
@@ -72,69 +31,55 @@ export default async function handler(req,res){
     }
     const rows=parseCSV(t);
     let rawOut=[]; let lastTgl='', lastNode='';
+    const getKey=(node,k)=>{
+      const low=(k||'').toLowerCase();
+      const km=(low.match(/(\d+[.,]?\d*\s*km)/)||[''])[0]||'';
+      return km? node+'||'+km : node+'||'+low.slice(0,50);
+    };
+    const splitPos=(tx)=>{
+      if(!tx) return []; let txt=String(tx).trim(); if(txt.length<5) return [];
+      let parts=txt.split(/(?=\d+\.\s)/).map(s=>s.trim()).filter(s=>s.length>5);
+      return parts.length?parts:[txt];
+    };
     for(let i=1;i<rows.length;i++){
-      const rr=rows[i];
-      let tgl=(rr[0]||'').trim();
-      if(!tgl) tgl=lastTgl; else lastTgl=tgl;
-      if(!tgl) continue;
-
-      let nodeCell='', kendalaCell='';
-      for(let c=0;c<rr.length;c++){
-        const cell=(rr[c]||'').trim(); if(!cell) continue;
-        if(/(Pos PGA|PATGTL|Tekmira|PSDM|Pusdatin|BBPMB|Balai|node\s*\()/i.test(cell) &&!/Duration|RFO\s*:/i.test(cell) && cell.length<200){
-          let cleanNode=cell.replace(/^\s*\d+\.\s*/, '').trim();
-          if(cleanNode.length>nodeCell.length) nodeCell=cleanNode;
-        }
-        if(/(Duration|RFO\s*:|km dari|POP|Masih dalam proses)/i.test(cell) && cell.length>10){
-          if(cell.length>kendalaCell.length) kendalaCell=cell;
-        }
-      }
-      if(nodeCell) lastNode=nodeCell;
-      let node=nodeCell||lastNode||'';
-      if(!kendalaCell){
+      try{
+        const rr=rows[i]; if(!rr) continue;
+        let tgl=(rr[0]||'').trim(); if(!tgl) tgl=lastTgl; else lastTgl=tgl; if(!tgl) continue;
+        let nodeCell='', kendalaCell='';
         for(let c=0;c<rr.length;c++){
-          const cell=(rr[c]||'').trim();
-          if(/Pos PGA.*Duration/i.test(cell)){ kendalaCell=cell; break; }
-        }
-      }
-      if(!kendalaCell) continue;
-      if(!node){
-        const m=kendalaCell.match(/(Pos PGA[^\n]*|PATGTL[^\n]*|Tekmira[^\n]*|PSDM[^\n]*)/i);
-        if(m){ node=m[1].split(/Duration|RFO/i)[0].trim().replace(/^\s*\d+\.\s*/,''); lastNode=node; }
-        else node=lastNode||'Unknown';
-      }
-
-      let nodesToCreate=[node];
-      const mNode=node.match(/(\d+)\s*node\s*\(([^)]+)\)/i);
-      if(mNode){
-        nodesToCreate=mNode[2].split(',').map(s=>s.trim().replace(/^\s*\d+\.\s*/,'')).filter(Boolean);
-      }else if(node.toLowerCase().includes('node') && node.includes('(')){
-        const inside=node.match(/\(([^)]+)\)/);
-        if(inside) nodesToCreate=inside[1].split(',').map(s=>s.trim().replace(/^\s*\d+\.\s*/,'')).filter(Boolean);
-      }
-
-      const posList=splitPos(kendalaCell);
-      const listToUse=posList.length?posList:[kendalaCell];
-      for(let curNodeName of nodesToCreate){
-        curNodeName=curNodeName.replace(/^\s*\d+\.\s*/, '').trim();
-        for(const raw of listToUse){
-          let firstLine=raw.replace(/^\s*\d+\.\s*/,'').split('\n')[0].trim();
-          let curNode=curNodeName;
-          if(/(Pos PGA|PATGTL|Tekmira|PSDM|BBPMB)/i.test(firstLine) &&!/^\d+\s*node/i.test(firstLine)){
-            const extracted=firstLine.split(/Duration|RFO/i)[0].trim().replace(/\s+/g,' ').slice(0,120).replace(/^\s*\d+\.\s*/,'');
-            if(extracted && extracted.length>2) curNode=extracted;
+          const cell=(rr[c]||'').trim(); if(!cell) continue;
+          if(/(Pos PGA|PATGTL|Tekmira|PSDM|Pusdatin|BBPMB|Balai|node)/i.test(cell) &&!/Duration|RFO\s*:/i.test(cell) && cell.length<200){
+            let cn=cell.replace(/^\s*\d+\.\s*/,'').trim();
+            if(cn.length>nodeCell.length) nodeCell=cn;
           }
-          let kendalaBersih=raw.replace(/^\s*\d+\.\s*[^\n]*\n?/, '').trim();
-          if(curNode && kendalaBersih.toLowerCase().startsWith(curNode.toLowerCase().slice(0,12))){
-            kendalaBersih=kendalaBersih.slice(curNode.length).trim();
+          if(/(Duration|RFO\s*:|km dari|POP|Masih dalam)/i.test(cell) && cell.length>10){
+            if(cell.length>kendalaCell.length) kendalaCell=cell;
           }
-          if(kendalaBersih.length<5) continue;
-          const prosesKey=getProsesKey(curNode,kendalaBersih);
-          rawOut.push({Tanggal:tgl, "Node/Pos":curNode, LINK:'Icon', KENDALA:kendalaBersih.slice(0,1200), _prosesKey:prosesKey});
         }
-      }
+        if(nodeCell) lastNode=nodeCell;
+        let node=nodeCell||lastNode||'Unknown';
+        if(!kendalaCell) continue;
+        let nodesToCreate=[node.replace(/^\s*\d+\.\s*/,'').trim()];
+        const mNode=node.match(/(\d+)\s*node\s*\(([^)]+)\)/i);
+        if(mNode){ nodesToCreate=mNode[2].split(',').map(s=>s.trim().replace(/^\s*\d+\.\s*/,'')).filter(Boolean); }
+        else if(node.toLowerCase().includes('node') && node.includes('(')){
+          const ins=node.match(/\(([^)]+)\)/); if(ins) nodesToCreate=ins[1].split(',').map(s=>s.trim().replace(/^\s*\d+\.\s*/,'')).filter(Boolean);
+        }
+        const posList=splitPos(kendalaCell);
+        const listToUse=posList.length?posList:[kendalaCell];
+        for(let curNodeName of nodesToCreate){
+          curNodeName=curNodeName.replace(/^\s*\d+\.\s*/,'').trim();
+          for(const raw of listToUse){
+            try{
+              let kb=raw.replace(/^\s*\d+\.\s*[^\n]*\n?/, '').trim();
+              if(curNodeName && kb.toLowerCase().startsWith(curNodeName.toLowerCase().slice(0,10))) kb=kb.slice(curNodeName.length).trim();
+              if(kb.length<5) continue;
+              rawOut.push({Tanggal:tgl, "Node/Pos":curNodeName, LINK:'Icon', KENDALA:kb.slice(0,1200), _prosesKey:getKey(curNodeName,kb)});
+            }catch{}
+          }
+        }
+      }catch{}
     }
-
     const grouped={};
     for(let o of rawOut){
       const gkey=o.Tanggal+'||'+o["Node/Pos"];
@@ -142,6 +87,60 @@ export default async function handler(req,res){
       else grouped[gkey].KENDALA+='\n\n'+o.KENDALA;
     }
     let out=Object.values(grouped).map(o=>{const _key=o.Tanggal+'||'+o["Node/Pos"]+'||'+o._prosesKey; return {...o,_key};});
-
     const bulan={Jan:0,Feb:1,Mar:2,Apr:3,Mei:4,May:4,Jun:5,Jul:6,Agu:7,Aug:7,Sep:8,Okt:9,Oct:9,Nov:10,Des:11,Dec:11};
-    const toDayKey=d=>{const m=d.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/); return m? new Date(+m[3],bulan[m[2]]??
+    const toDayKey=d=>{const mm=d.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/); return mm? new Date(+mm[3],bulan[mm[2]]??0,+mm[1]).toISOString().slice(0,10):null;};
+    const parseTgl=s=>{const mm=s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/); return mm? new Date(+mm[3],bulan[mm[2]]??0,+mm[1]):new Date(0);};
+    const map={}; out.forEach(o=>{const day=toDayKey(o.Tanggal); if(!day) return; if(!map[o._prosesKey]) map[o._prosesKey]=[]; map[o._prosesKey].push({...o,_day:day});});
+    let result3H=[], result7H=[], result30H=[], result90H=[];
+    let nodes3H=new Set(), nodes7H=new Set(), nodes30H=new Set(), nodes90H=new Set();
+    let keys3H=new Set(), keys7H=new Set(), keys30H=new Set(), keys90H=new Set();
+    for(const k in map){
+      const uniq=[...new Set(map[k].map(x=>x._day))].sort();
+      if(!uniq.length) continue;
+      let streak=[uniq[0]];
+      for(let i=1;i<=uniq.length;i++){
+        const isLast=i===uniq.length; const diff=!isLast? (new Date(uniq[i])-new Date(uniq[i-1]))/86400000 : 999;
+        if(!isLast && diff===1) streak.push(uniq[i]);
+        else{
+          if(streak.length>=3) map[k].forEach(row=>{ if(streak.includes(row._day)&&!keys3H.has(row._key)){ result3H.push(row); keys3H.add(row._key); nodes3H.add(row["Node/Pos"]); } });
+          if(streak.length>=7) map[k].forEach(row=>{ if(streak.includes(row._day)&&!keys7H.has(row._key)){ result7H.push(row); keys7H.add(row._key); nodes7H.add(row["Node/Pos"]); } });
+          if(streak.length>=30) map[k].forEach(row=>{ if(streak.includes(row._day)&&!keys30H.has(row._key)){ result30H.push(row); keys30H.add(row._key); nodes30H.add(row["Node/Pos"]); } });
+          if(streak.length>=90) map[k].forEach(row=>{ if(streak.includes(row._day)&&!keys90H.has(row._key)){ result90H.push(row); keys90H.add(row._key); nodes90H.add(row["Node/Pos"]); } });
+          if(!isLast) streak=[uniq[i]];
+        }
+      }
+    }
+    // cek Duration Tgl 10/09/2026 - saat ini
+    for(let o of out){
+      try{
+        if(/saat ini/i.test(o.KENDALA)){
+          const m=o.KENDALA.match(/Tgl\s*(\d{1,2})\/(\d{4})/);
+          if(m){
+            const start=new Date(+m[3],+m[2]-1,+m[1]); const rep=toDayKey(o.Tanggal); if(!rep) continue;
+            const diff=(new Date(rep)-start)/86400000;
+            if(diff>=2 &&!keys3H.has(o._key)){ result3H.push(o); keys3H.add(o._key); nodes3H.add(o["Node/Pos"]); }
+            if(diff>=6 &&!keys7H.has(o._key)){ result7H.push(o); keys7H.add(o._key); nodes7H.add(o["Node/Pos"]); }
+            if(diff>=29 &&!keys30H.has(o._key)){ result30H.push(o); keys30H.add(o._key); nodes30H.add(o["Node/Pos"]); }
+            if(diff>=89 &&!keys90H.has(o._key)){ result90H.push(o); keys90H.add(o._key); nodes90H.add(o["Node/Pos"]); }
+          }
+        }
+      }catch{}
+    }
+    const potonganMap={}; for(const k in map){ const s=map[k].sort((a,b)=> new Date(a._day)-new Date(b._day)); if(s[0]&&!potonganMap[k]) potonganMap[k]=s[0]; }
+    const resultPotongan=Object.values(potonganMap);
+    const clean=arr=>arr.map(({_day,_prosesKey,...r})=>r).sort((a,b)=> parseTgl(b.Tanggal)-parseTgl(a.Tanggal));
+    const filter=req.query.filter||'semua';
+    let dataToReturn=clean(out);
+    if(filter==='3hari') dataToReturn=clean(result3H);
+    if(filter==='7hari') dataToReturn=clean(result7H);
+    if(filter==='30hari') dataToReturn=clean(result30H);
+    if(filter==='90hari') dataToReturn=clean(result90H);
+    if(filter==='potongan') dataToReturn=clean(resultPotongan);
+    return res.status(200).json({
+      data:dataToReturn, total:out.length, total1H:out.length, total3H:result3H.length, total7H:result7H.length, total30H:result30H.length, total90H:result90H.length, totalPotongan:resultPotongan.length,
+      count:dataToReturn.length, count3hari:nodes3H.size, count7hari:nodes7H.size
+    });
+  }catch(e){
+    return res.status(200).json({data:[], total:0, total1H:0, total3H:0, total7H:0, total30H:0, total90H:0, totalPotongan:0, count:0, error:e.message});
+  }
+}
