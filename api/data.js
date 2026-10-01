@@ -60,12 +60,15 @@ export default async function handler(req,res){
       if(!tgl) continue;
 
       // 2. CARI NODE & KENDALA DI KOLOM MANAPUN (fix image_fc33d9.png & image_30a856.png)
+      // cari kolom Node & kolom Kendala
       let nodeCell='', kendalaCell='';
       for(let c=0;c<rr.length;c++){
         const cell=(rr[c]||'').trim();
-        if(!cell || cell.length<2) continue;
+        if(!cell) continue;
         if(/(Pos PGA|PATGTL|Tekmira|PSDM|Pusdatin|BBPMB|Balai)/i.test(cell) &&!/Duration|RFO\s*:/i.test(cell) && cell.length<120){
-          if(cell.length>nodeCell.length) nodeCell=cell;
+          // HAPUS NO URUT DI SINI!
+          let cleanNode = cell.replace(/^\s*\d+\.\s*/, '').trim(); // 1. BBP MB -> BBP MB
+          if(cleanNode.length>nodeCell.length) nodeCell=cleanNode;
         }
         if(/(Duration|RFO\s*:|km dari|POP|Masih dalam proses)/i.test(cell) && cell.length>10){
           if(cell.length>kendalaCell.length) kendalaCell=cell;
