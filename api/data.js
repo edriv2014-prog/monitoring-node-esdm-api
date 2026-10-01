@@ -41,12 +41,10 @@ export default async function handler(req,res){
       let parts=txt.split(/(?=\d+\.\s)/).map(s=>s.trim()).filter(s=>s.length>5);
       return parts.length?parts:[txt];
     };
-        for(let i=1;i<rows.length;i++){
+    for(let i=1;i<rows.length;i++){
       try{
         const rr=rows[i]; if(!rr) continue;
         let tgl=(rr[0]||'').trim(); if(!tgl) tgl=lastTgl; else lastTgl=tgl; if(!tgl) continue;
-
-        // cari CELL terbesar yang ada Duration (itu isinya semua node)
         let bigCell='';
         for(let c=0;c<rr.length;c++){
           const cell=(rr[c]||'').trim();
@@ -54,36 +52,34 @@ export default async function handler(req,res){
         }
         if(!bigCell) continue;
 
-        // SPLIT berdasarkan 1. 2. 3. -> biar gak Unknown
-        const parts = bigCell.split(/(?=\n?\s*\d+\.\s*)/).map(s=>s.trim()).filter(s=>s.length>10);
+        // split HANYA kalau awalnya ada "1. Pos" atau "2. Gedung", bukan "31 -"
+        const parts = bigCell.split(/\n\s*(?=\d+\.\s*(?:Pos|Gedung|BPH|PPSDM|Tekmira|BBPMB|Balai|PATGTL|PSDM|POP))/i)
+                        .map(s=>s.trim()).filter(s=>s.length>15);
         const listToUse = parts.length? parts : [bigCell];
 
         for(const raw of listToUse){
           try{
-            const lines = raw.trim().split('\n').map(s=>s.trim()).filter(Boolean);
+            const lines = raw.split('\n').map(s=>s.trim()).filter(Boolean);
             if(!lines.length) continue;
-            // baris pertama = nama node (hapus 1. )
-            let nodeName = lines[0].replace(/^\s*\d+\.\s*/,'').trim();
-            // kalau baris pertama masih Duration, berarti ini lanjutan RFO, ambil lastNode
-            if(/^(Duration|RFO)/i.test(nodeName)){
-              nodeName = lastNode || 'Unknown';
-            } else {
-              // ini node baru, simpan
-              lastNode = nodeName;
+            let first = lines[0].replace(/^\s*\d+\.\s*/,'').trim();
+
+            // VALIDASI: harus ada kata kunci node, kalau gak ada anggap bukan node baru
+            if(!/(Pos|Gedung|BPH|PPSDM|Tekmira|BBPMB|Balai|PATGTL|PSDM|POP)/i.test(first)){
+              // ini kayak "31 - saat ini" atau "00 - 27 Sept" -> skip sebagai node
+              continue;
             }
 
-            // hapus nourut 1. 2. dari Node/Pos
-            nodeName = nodeName.replace(/^\s*\d+\.\s*/,'').trim().split(/Duration|RFO/i)[0].trim();
+            let nodeName = first.split(/Duration|RFO/i)[0].trim().replace(/^\s*\d+\.\s*/,'').trim();
             if(nodeName.length<3) continue;
+            lastNode = nodeName;
 
-            // KENDALA = sisa baris setelah nama node
             let kendala = raw.replace(/^\s*\d+\.\s*[^\n]*\n?/,'').trim();
-            if(kendala.length<5) kendala = lines.slice(1).join('\n');
+            if(kendala.length<10) kendala = lines.slice(1).join('\n');
 
-            // handle 3 node (PPSDM Geominerba, Tekmira Bandung, PEP Bandung)
+            // split 3 node (PPSDM Geominerba, Tekmira Bandung, PEP Bandung)
             let nodesToCreate=[nodeName];
             const mNode=nodeName.match(/(\d+)\s*node\s*\(([^)]+)\)/i);
-            if(mNode){ nodesToCreate=mNode[2].split(',').map(s=>s.trim().replace(/^\s*\d+\.\s*/,'')).filter(Boolean); }
+            if(mNode) nodesToCreate=mNode[2].split(',').map(s=>s.trim().replace(/^\s*\d+\.\s*/,'')).filter(Boolean);
 
             for(let cur of nodesToCreate){
               cur = cur.replace(/^\s*\d+\.\s*/,'').trim();
