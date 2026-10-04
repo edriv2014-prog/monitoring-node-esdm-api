@@ -10,7 +10,7 @@ export default async function handler(req, res) {
     }
     if(!csvUrl.includes('gid=')) csvUrl+=(csvUrl.includes('?')?'&':'?')+`gid=${gid}&single=true`;
 
-
+    return s.status(200).json({csvUrl})
     const r = await fetch(csvUrl);
     if(!r.ok) throw new Error('Gagal fetch sheet: ' + r.status);
     const csv = await r.text();
