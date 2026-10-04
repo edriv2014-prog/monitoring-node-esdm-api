@@ -1,11 +1,20 @@
 // api/data.js
 export default async function handler(req, res) {
   try {
-    const gid = req.query.gid || '285923348';
-    const SHEET_ID = '1f83CxoN-7Oqa_F7LwqejfK8bIrpW0wJgZAkkeVgbik';
-    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`;
+    
+        const gid=req.query.gid||'285923348';
+    let csvUrl=process.env.SHEET_CSV_URL||'';
+    if(!csvUrl) throw new Error('SHEET_CSV_URL kosong');
+    if(csvUrl.includes('/edit')){
+      const m=csvUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      if(m) csvUrl=`https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${gid}`;
+    }
+    if(!csvUrl.includes('gid=')) csvUrl+=(csvUrl.includes('?')?'&':'?')+`gid=${gid}&single=true`;
 
-    const r = await fetch(url);
+
+    
+    
+    const r = await fetch(csvUrl);
     if(!r.ok) throw new Error('Gagal fetch sheet: ' + r.status);
     const csv = await r.text();
 
