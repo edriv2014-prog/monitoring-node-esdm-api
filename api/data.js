@@ -106,6 +106,9 @@ export default async function handler(req, res) {
 
     res.setHeader('Cache-Control','s-maxage=60, stale-while-revalidate=300');
     return res.status(200).json({
+      test:"test"
+    })
+    /*return res.status(200).json({
       data,
       url:csvUrl,
       url1:csvUrl,
@@ -115,7 +118,7 @@ export default async function handler(req, res) {
       total3H,
       count3hari,
       total: data.length
-    });
+    });*/
 
   } catch(e){
     console.error(e);
