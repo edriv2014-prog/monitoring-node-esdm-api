@@ -31,6 +31,23 @@ export default async function handler(req,res){
     }
     const rows=parseCSV(t);
     let rawOut=[]; let lastTgl='', lastNode='';
+    rows.forEach(r=>{
+      let tgl = r.Tanggal || r['Tanggal (Otomatis)'] || '';
+      if(!tgl && lastTgl) tgl = lastTgl; // <-- FIX MERGE
+      if(tgl) lastTgl = tgl;
+      r.Tanggal = tgl;
+      // ... lanjut
+    });    
+    const data = raw.map(row=>{
+    let t = (row['Tanggal (Otomatis)'] || row.Tanggal || '').trim();
+    if(!t && lastTanggal) t = lastTanggal;
+    if(t) lastTanggal = t;
+    return {
+      ...row,
+      Tanggal: t,
+      _day: toDay(t), // 2026-09-16
+      _prosesKey: (row['Node/Pos']||'') + '|' + (row.KENDALA||'').slice(0,20)
+    };
     const getKey=(node,k)=>{
       const low=(k||'').toLowerCase();
       const km=(low.match(/(\d+[.,]?\d*\s*km)/)||[''])[0]||'';
