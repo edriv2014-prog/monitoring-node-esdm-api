@@ -108,6 +108,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       data,
       url:csvUrl,
+      url1:csvUrl,
       potongan,
       totalPotongan: potongan.length,
       totalPatokan: potongan.length,
