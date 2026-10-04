@@ -107,6 +107,7 @@ export default async function handler(req, res) {
     res.setHeader('Cache-Control','s-maxage=60, stale-while-revalidate=300');
     return res.status(200).json({
       data,
+      url:csvUrl,
       potongan,
       totalPotongan: potongan.length,
       totalPatokan: potongan.length,
