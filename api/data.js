@@ -5,7 +5,7 @@ export default async function handler(req,res){
   try{
     const gid=req.query.gid||'285923348';
     let csvUrl=process.env.SHEET_CSV_URL||'';
-    return res.status(200).json({test:"www"});
+//    return res.status(200).json({test:"www"});
     if(!csvUrl) throw new Error('SHEET_CSV_URL kosong');
     if(csvUrl.includes('/edit')){
       const m=csvUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
