@@ -1,128 +1,142 @@
 export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
   try {
+    const gid = req.query.gid || '285923348';
+    let csvUrl = process.env.SHEET_CSV_URL || '';
+    if (!csvUrl) throw new Error('SHEET_CSV_URL kosong');
 
-    const gid=req.query.gid||'285923348';
-    let csvUrl=process.env.SHEET_CSV_URL||'';
-    if(!csvUrl) throw new Error('SHEET_CSV_URL kosong');
-    if(csvUrl.includes('/edit')){
-      const m=csvUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
-      if(m) csvUrl=`https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${gid}`;
+    // Paksa format export CSV yang benar
+    if (csvUrl.includes('/d/')) {
+      const m = csvUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      if (m) csvUrl = `https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${gid}`;
     }
-    if(!csvUrl.includes('gid=')) csvUrl+=(csvUrl.includes('?')?'&':'?')+`gid=${gid}&single=true`;
-
 
     const r = await fetch(csvUrl);
-    if(!r.ok) throw new Error('Gagal fetch sheet: ' + r.status);
+    if (!r.ok) throw new Error('Gagal fetch sheet: ' + r.status);
     const csv = await r.text();
 
-    // Parse CSV simple (handle ", ")
-    const lines = csv.split('\n').filter(l=>l.trim());
-    if(lines.length < 3) return res.status(200).json({data:[], total3H:0});
+    // === PARSER CSV TAHAN NEWLINE ===
+    function parseCSV(text) {
+      const rows = [];
+      let curRow = [];
+      let cur = '';
+      let inQuote = false;
+      for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        const next = text[i+1];
+        if (c === '"') {
+          if (inQuote && next === '"') { cur += '"'; i++; } // "" = escaped "
+          else inQuote =!inQuote;
+        } else if (c === ',' &&!inQuote) {
+          curRow.push(cur);
+          cur = '';
+        } else if ((c === '\n' || c === '\r') &&!inQuote) {
+          if (c === '\r' && next === '\n') i++;
+          curRow.push(cur);
+          rows.push(curRow);
+          curRow = [];
+          cur = '';
+        } else {
+          cur += c;
+        }
+      }
+      if (cur || curRow.length) {
+        curRow.push(cur);
+        rows.push(curRow);
+      }
+      return rows;
+    }
 
-    const headers = lines[1].split(',').map(h=>h.replace(/"/g,'').trim()); // baris 2 = header
-    // headers: Tanggal (Otomatis), Backhaul, Outage, Overload, Detail Outage...
+    const allRows = parseCSV(csv).filter(row => row.join('').trim()!== '');
+    if (allRows.length < 3) return res.status(200).json({ data: [], total3H: 0 });
+
+    // Di sheet kamu: baris 0 = Tanggal, Icon, DTP | baris 1 = Backhaul, Outage, Overload, Detail Outage...
+    // Data asli mulai baris 2
+    const dataRows = allRows.slice(2);
 
     const bulan = {Jan:0,Feb:1,Mar:2,Apr:3,Mei:4,May:4,Jun:5,Jul:6,Agu:7,Aug:7,Sep:8,Okt:9,Oct:9,Nov:10,Des:11,Dec:11};
-    const toDay = (s)=>{
-      if(!s) return null;
+    const toDay = (s) => {
+      if (!s) return null;
       const m = s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/);
-      if(!m) return null;
-      const d = new Date(Date.UTC(+m[3], bulan[m[2]]??0, +m[1]));
-      return d.toISOString().slice(0,10);
+      if (!m) return null;
+      return new Date(Date.UTC(+m[3], bulan[m[2]]?? 0, +m[1])).toISOString().slice(0,10);
     };
 
     let lastTgl = '';
     let raw = [];
 
-    for(let i=2;i<lines.length;i++){
-      // split dengan regex CSV yang aman
-      const cols = lines[i].match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || [];
-      const get = (idx)=> (cols[idx]||'').replace(/^"|"$/g,'').trim();
+    dataRows.forEach((cols) => {
+      let tgl = (cols[0] || '').replace(/^"|"$/g, '').trim() || lastTgl;
+      if (tgl) lastTgl = tgl;
+      if (!tgl) return;
 
-      let tgl = get(0) || lastTgl; // <-- FIX MERGE: kalau kosong pakai tanggal sebelumnya
-      if(tgl) lastTgl = tgl;
-      if(!tgl) continue;
+      const detail = (cols[4] || '').trim(); // Kolom E = Detail Outage Icon
+      if (!detail) return;
 
-      const detail = get(4) || '';
-      if(!detail) continue;
+      // Split "1. Pos PGA... 2. Pos PGA..." -> jadi array node
+      const nodes = detail.split(/\d+\.\s+/).filter(x => x.trim());
 
-      // Bersihin "1. Pos PGA Soputan" -> "Pos PGA Soputan"
-      const nodes = detail.split(/\d+\.\s+/).filter(x=>x.trim()).map(x=>x.split('\n')[0].trim());
-
-      nodes.forEach(nodeLine=>{
-        if(!nodeLine) return;
+      nodes.forEach(nodeLine => {
+        if (!nodeLine) return;
         const m = nodeLine.match(/^(.*?)\s+Duration\s*:/i);
-        const node = m? m[1].trim() : nodeLine.slice(0,40);
-        const kendala = nodeLine;
+        const nodeName = m? m[1].trim() : nodeLine.split('\n')[0].trim().slice(0,50);
 
         raw.push({
           Tanggal: tgl,
-          "Node/Pos": node.replace(/^\s*\d+\.\s*/,'').trim(),
+          "Node/Pos": nodeName.replace(/^\s*\d+\.\s*/, '').trim(),
           LINK: 'Icon',
-          KENDALA: kendala,
+          KENDALA: nodeLine.trim(),
           _day: toDay(tgl),
-          _prosesKey: node + '|' + tgl
+          _prosesKey: nodeName + '|' + tgl
         });
       });
-    }
-
-    // Hitung 3H+ : Node muncul 3 hari berturut
-    const byNode = {};
-    raw.forEach(o=>{
-      if(!byNode[o["Node/Pos"]]) byNode[o["Node/Pos"]] = new Set();
-      if(o._day) byNode[o["Node/Pos"]].add(o._day);
     });
 
-    const is3H = (node, day)=>{
-      const days = [...(byNode[node]||[])].sort();
+    // Hitung 3H+
+    const byNode = {};
+    raw.forEach(o => {
+      if (!byNode[o["Node/Pos"]]) byNode[o["Node/Pos"]] = new Set();
+      if (o._day) byNode[o["Node/Pos"]].add(o._day);
+    });
+
+    const is3H = (node, day) => {
+      const days = [...(byNode[node] || [])].sort();
       const idx = days.indexOf(day);
-      if(idx < 2) return false;
+      if (idx < 2) return false;
       const d1 = new Date(days[idx-2]), d2 = new Date(days[idx-1]), d3 = new Date(days[idx]);
       return (d2 - d1 === 86400000) && (d3 - d2 === 86400000);
     };
 
-    const data = raw.map(o=>({
-     ...o,
-      is3HPlus: is3H(o["Node/Pos"], o._day)
-    }));
+    const data = raw.map(o => ({...o, is3HPlus: is3H(o["Node/Pos"], o._day) }));
+    const total3H = data.filter(d => d.is3HPlus).length;
 
-    const total3H = data.filter(d=>d.is3HPlus).length;
-    const count3hari = Object.keys(byNode).filter(n=>{
-      const days = [...byNode[n]].sort();
-      for(let i=2;i<days.length;i++){
-        const d1=new Date(days[i-2]), d2=new Date(days[i-1]), d3=new Date(days[i]);
-        if((d2-d1===86400000)&&(d3-d2===86400000)) return true;
-      }
-      return false;
-    }).length;
-
-    // Patokan Tanggal Awal = tanggal pertama muncul per Node
     const potonganMap = {};
-    [...data].sort((a,b)=> new Date(a._day) - new Date(b._day)).forEach(o=>{
-      if(!potonganMap[o["Node/Pos"]]) potonganMap[o["Node/Pos"]] = o;
+    [...data].sort((a,b) => new Date(a._day) - new Date(b._day)).forEach(o => {
+      if (!potonganMap[o["Node/Pos"]]) potonganMap[o["Node/Pos"]] = o;
     });
-
-    const potongan = Object.values(potonganMap);
 
     res.setHeader('Cache-Control','s-maxage=60, stale-while-revalidate=300');
     return res.status(200).json({
-      test:"test",
-      url:csvUrl,
-    })
-    /*return res.status(200).json({
       data,
-      url:csvUrl,
-      url1:csvUrl,
-      potongan,
-      totalPotongan: potongan.length,
-      totalPatokan: potongan.length,
+      potongan: Object.values(potonganMap),
+      totalPotongan: Object.keys(potonganMap).length,
       total3H,
-      count3hari,
+      count3hari: Object.keys(byNode).filter(n => {
+        const days = [...byNode[n]].sort();
+        for(let i=2;i<days.length;i++){
+          if(new Date(days[i-1]) - new Date(days[i-2]) === 86400000 && new Date(days[i]) - new Date(days[i-1]) === 86400000) return true;
+        }
+        return false;
+      }).length,
       total: data.length
-    });*/
+    });
 
-  } catch(e){
+  } catch (e) {
     console.error(e);
-    return res.status(200).json({data:[], error:e.message, total3H:0, total:0});
+    return res.status(200).json({ data: [], error: e.message, total3H: 0, total: 0 });
   }
 }
