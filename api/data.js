@@ -1,79 +1,116 @@
-export default async function handler(req,res){
-  res.setHeader('Access-Control-Allow-Origin','*');
-  res.setHeader('Content-Type','application/json');
-  if(req.method==='OPTIONS') return res.status(200).end();
-  try{
-    const gid=req.query.gid||'285923348';
-    let csvUrl=process.env.SHEET_CSV_URL||'';
-    if(!csvUrl) throw new Error('SHEET_CSV_URL kosong');
-    if(csvUrl.includes('/edit')){
-      const m=csvUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
-      if(m) csvUrl=`https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${gid}`;
-    }
-    if(!csvUrl.includes('gid=')) csvUrl+=(csvUrl.includes('?')?'&':'?')+`gid=${gid}&single=true`;
-    const r=await fetch(csvUrl); if(!r.ok) throw new Error('fetch '+r.status);
-    const t=await r.text();
-    function parseCSV(txt){
-      const rows=[];let cur='',row=[],q=false;
-      for(let i=0;i<txt.length;i++){
-        let c=txt[i],n=txt[i+1];
-        if(c=='"'&&q&&n=='"'){cur+='"';i++;continue}
-        if(c=='"'){q=!q;continue}
-        if(c==','&&!q){row.push(cur);cur='';continue}
-        if((c=='\n'||c=='\r')&&!q){
-          if(cur||row.length){row.push(cur);rows.push(row);row=[];cur=''}
-          if(c=='\r'&&n=='\n') i++; continue
-        }
-        cur+=c;
-      }
-      if(cur||row.length){row.push(cur);rows.push(row)}
-      return rows;
-    }
-    const rows=parseCSV(t);
-    let rawOut=[]; let lastTgl='';
-    const getKey=(node,k)=>{
-      const low=(k||'').toLowerCase();
-      const km=(low.match(/(\d+[.,]?\d*\s*km)/)||[''])[0]||'';
-      return km? node+'||'+km : node+'||'+low.slice(0,50);
+// api/data.js
+export default async function handler(req, res) {
+  try {
+    const gid = req.query.gid || '285923348';
+    const SHEET_ID = '1f83CxoN-7Oqa_F7LwqejfK8bIrpW0wJgZAkkeVgbik';
+    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`;
+
+    const r = await fetch(url);
+    if(!r.ok) throw new Error('Gagal fetch sheet: ' + r.status);
+    const csv = await r.text();
+
+    // Parse CSV simple (handle ", ")
+    const lines = csv.split('\n').filter(l=>l.trim());
+    if(lines.length < 3) return res.status(200).json({data:[], total3H:0});
+
+    const headers = lines[1].split(',').map(h=>h.replace(/"/g,'').trim()); // baris 2 = header
+    // headers: Tanggal (Otomatis), Backhaul, Outage, Overload, Detail Outage...
+
+    const bulan = {Jan:0,Feb:1,Mar:2,Apr:3,Mei:4,May:4,Jun:5,Jul:6,Agu:7,Aug:7,Sep:8,Okt:9,Oct:9,Nov:10,Des:11,Dec:11};
+    const toDay = (s)=>{
+      if(!s) return null;
+      const m = s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/);
+      if(!m) return null;
+      const d = new Date(Date.UTC(+m[3], bulan[m[2]]??0, +m[1]));
+      return d.toISOString().slice(0,10);
     };
 
-    for(let i=1;i<rows.length;i++){
-      try{
-        const rr=rows[i]; if(!rr) continue;
-        let tgl=(rr[0]||'').trim();
-        // FIX MERGE: kalau kosong pakai tanggal sebelumnya (A469:A475)
-        if(!tgl) tgl=lastTgl; else lastTgl=tgl;
-        if(!tgl) continue;
+    let lastTgl = '';
+    let raw = [];
 
-        let bigCell='';
-        for(let c=0;c<rr.length;c++){
-          const cell=(rr[c]||'').trim();
-          if(cell.length>bigCell.length && /(Duration|RFO)/i.test(cell)) bigCell=cell;
-        }
-        if(!bigCell) continue;
+    for(let i=2;i<lines.length;i++){
+      // split dengan regex CSV yang aman
+      const cols = lines[i].match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || [];
+      const get = (idx)=> (cols[idx]||'').replace(/^"|"$/g,'').trim();
 
-        const parts = bigCell.split(/\n\s*(?=\d+\.\s*(?:Pos|Gedung|BPH|PPSDM|Tekmira|BBPMB|Balai|PATGTL|PSDM|POP))/i)
-                       .map(s=>s.trim()).filter(s=>s.length>15);
-        const listToUse = parts.length? parts : [bigCell];
+      let tgl = get(0) || lastTgl; // <-- FIX MERGE: kalau kosong pakai tanggal sebelumnya
+      if(tgl) lastTgl = tgl;
+      if(!tgl) continue;
 
-        for(const raw of listToUse){
-          try{
-            const lines = raw.split('\n').map(s=>s.trim()).filter(Boolean);
-            if(!lines.length) continue;
-            let first = lines[0].replace(/^\s*\d+\.\s*/,'').trim();
-            if(!/(Pos|Gedung|BPH|PPSDM|Tekmira|BBPMB|Balai|PATGTL|PSDM|POP)/i.test(first)){
-              continue;
-            }
-            let nodeName = first.split(/Duration|RFO/i)[0].trim().replace(/^\s*\d+\.\s*/,'').trim();
-            if(nodeName.length<3) continue;
-            let kendala = raw.replace(/^\s*\d+\.\s*[^\n]*\n?/,'').trim();
-            if(kendala.length<10) kendala = lines.slice(1).join('\n');
+      const detail = get(4) || '';
+      if(!detail) continue;
 
-            let nodesToCreate=[nodeName];
-            const mNode=nodeName.match(/(\d+)\s*node\s*\(([^)]+)\)/i);
-            if(mNode) nodesToCreate=mNode[2].split(',').map(s=>s.trim().replace(/^\s*\d+\.\s*/,'')).filter(Boolean);
+      // Bersihin "1. Pos PGA Soputan" -> "Pos PGA Soputan"
+      const nodes = detail.split(/\d+\.\s+/).filter(x=>x.trim()).map(x=>x.split('\n')[0].trim());
 
-            for(let cur of nodesToCreate){
-              cur = cur.replace(/^\s*\d+\.\s*/,'').trim();
-              if(cur.length<3) continue;
-              rawOut.push({Tanggal:tgl, "Node/Pos":cur, LINK:'Icon', KENDALA:kendala.slice(0,
+      nodes.forEach(nodeLine=>{
+        if(!nodeLine) return;
+        const m = nodeLine.match(/^(.*?)\s+Duration\s*:/i);
+        const node = m? m[1].trim() : nodeLine.slice(0,40);
+        const kendala = nodeLine;
+
+        raw.push({
+          Tanggal: tgl,
+          "Node/Pos": node.replace(/^\s*\d+\.\s*/,'').trim(),
+          LINK: 'Icon',
+          KENDALA: kendala,
+          _day: toDay(tgl),
+          _prosesKey: node + '|' + tgl
+        });
+      });
+    }
+
+    // Hitung 3H+ : Node muncul 3 hari berturut
+    const byNode = {};
+    raw.forEach(o=>{
+      if(!byNode[o["Node/Pos"]]) byNode[o["Node/Pos"]] = new Set();
+      if(o._day) byNode[o["Node/Pos"]].add(o._day);
+    });
+
+    const is3H = (node, day)=>{
+      const days = [...(byNode[node]||[])].sort();
+      const idx = days.indexOf(day);
+      if(idx < 2) return false;
+      const d1 = new Date(days[idx-2]), d2 = new Date(days[idx-1]), d3 = new Date(days[idx]);
+      return (d2 - d1 === 86400000) && (d3 - d2 === 86400000);
+    };
+
+    const data = raw.map(o=>({
+     ...o,
+      is3HPlus: is3H(o["Node/Pos"], o._day)
+    }));
+
+    const total3H = data.filter(d=>d.is3HPlus).length;
+    const count3hari = Object.keys(byNode).filter(n=>{
+      const days = [...byNode[n]].sort();
+      for(let i=2;i<days.length;i++){
+        const d1=new Date(days[i-2]), d2=new Date(days[i-1]), d3=new Date(days[i]);
+        if((d2-d1===86400000)&&(d3-d2===86400000)) return true;
+      }
+      return false;
+    }).length;
+
+    // Patokan Tanggal Awal = tanggal pertama muncul per Node
+    const potonganMap = {};
+    [...data].sort((a,b)=> new Date(a._day) - new Date(b._day)).forEach(o=>{
+      if(!potonganMap[o["Node/Pos"]]) potonganMap[o["Node/Pos"]] = o;
+    });
+
+    const potongan = Object.values(potonganMap);
+
+    res.setHeader('Cache-Control','s-maxage=60, stale-while-revalidate=300');
+    return res.status(200).json({
+      data,
+      potongan,
+      totalPotongan: potongan.length,
+      totalPatokan: potongan.length,
+      total3H,
+      count3hari,
+      total: data.length
+    });
+
+  } catch(e){
+    console.error(e);
+    return res.status(200).json({data:[], error:e.message, total3H:0, total:0});
+  }
+}
