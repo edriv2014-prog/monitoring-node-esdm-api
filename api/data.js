@@ -1,8 +1,7 @@
-// api/data.js
 export default async function handler(req, res) {
   try {
-    
-        const gid=req.query.gid||'285923348';
+
+    const gid=req.query.gid||'285923348';
     let csvUrl=process.env.SHEET_CSV_URL||'';
     if(!csvUrl) throw new Error('SHEET_CSV_URL kosong');
     if(csvUrl.includes('/edit')){
@@ -12,8 +11,6 @@ export default async function handler(req, res) {
     if(!csvUrl.includes('gid=')) csvUrl+=(csvUrl.includes('?')?'&':'?')+`gid=${gid}&single=true`;
 
 
-    
-    
     const r = await fetch(csvUrl);
     if(!r.ok) throw new Error('Gagal fetch sheet: ' + r.status);
     const csv = await r.text();
