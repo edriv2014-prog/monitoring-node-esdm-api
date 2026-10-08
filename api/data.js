@@ -48,9 +48,19 @@ export default async function handler(req, res) {
     const bulan = {Jan:0,Feb:1,Mar:2,Apr:3,Mei:4,May:4,Jun:5,Jul:6,Agu:7,Aug:7,Sep:8,Okt:9,Oct:9,Nov:10,Des:11,Dec:11};
     const toDay = (s)=>{
       if(!s) return null;
-      const m = s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/);
+      s = s.toString().trim();
+      // Format baru: 1-Jan-26 atau 1-Jan-2026
+      let m = s.match(/(\d{1,2})-([A-Za-z]{3})-(\d{2,4})/);
+      if(m){
+        let y = +m[3]; if(y < 100) y += 2000; // 26 -> 2026
+        const d = new Date(Date.UTC(y, bulan[m[2]]??0, +m[1]));
+        return d.toISOString().slice(0,10);
+      }
+      // Format lama: 01 Jan 2026
+      m = s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/);
       if(!m) return null;
-      return new Date(Date.UTC(+m[3], bulan[m[2]]??0, +m[1])).toISOString().slice(0,10);
+      const d = new Date(Date.UTC(+m[3], bulan[m[2]]??0, +m[1]));
+      return d.toISOString().slice(0,10);
     };
 
     let lastTgl = '';
