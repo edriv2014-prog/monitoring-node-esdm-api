@@ -1,100 +1,103 @@
-
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
-
   try {
-    const gid=req.query.gid||'285923348';
-    let csvUrl=process.env.SHEET_CSV_URL||'';
-    if(!csvUrl) throw new Error('SHEET_CSV_URL kosong');
-    if(csvUrl.includes('/edit')){
-      const m=csvUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
-      if(m) csvUrl=`https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${gid}`;
+    const gid = req.query.gid || '285923348';
+    let csvUrl = process.env.SHEET_CSV_URL || '';
+    if (csvUrl.includes('/edit')) {
+      const m = csvUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      if (m) csvUrl = `https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${gid}`;
     }
-    if(!csvUrl.includes('gid=')) csvUrl+=(csvUrl.includes('?')?'&':'?')+`gid=${gid}&single=true`;
+    if (!csvUrl.includes('gid=')) csvUrl += `${csvUrl.includes('?')? '&' : '?'}gid=${gid}&single=true`;
 
-    const r = await fetch(csvUrl);
-    if(!r.ok) throw new Error('Gagal fetch sheet: ' + r.status);
-    const csv = await r.text();
+    const csv = await (await fetch(csvUrl)).text();
 
-    function parseCSV(text){
-      const rows=[]; let curRow=[]; let cur=''; let inQuote=false;
-      for(let i=0;i<text.length;i++){
-        const c=text[i]; const next=text[i+1];
-        if(c=='"'){ if(inQuote && next=='"'){ cur+='"'; i++; } else inQuote=!inQuote; }
-        else if(c==',' &&!inQuote){ curRow.push(cur); cur=''; }
-        else if((c=='\n' || c=='\r') &&!inQuote){ if(c=='\r' && next=='\n') i++; curRow.push(cur); rows.push(curRow); curRow=[]; cur=''; }
+    function parseCSV(t){
+      const rows=[]; let curRow=[],cur='',q=false;
+      for(let i=0;i<t.length;i++){
+        const c=t[i],n=t[i+1];
+        if(c=='"'){ if(q&&n=='"'){cur+='"'; i++;} else q=!q; }
+        else if(c==','&&!q){curRow.push(cur); cur='';}
+        else if((c=='\n'||c=='\r')&&!q){ if(c=='\r'&&n=='\n') i++; curRow.push(cur); rows.push(curRow); curRow=[]; cur='';}
         else cur+=c;
       }
-      if(cur || curRow.length){ curRow.push(cur); rows.push(curRow); }
+      if(cur||curRow.length){curRow.push(cur); rows.push(curRow);}
       return rows;
     }
 
-    const allRows = parseCSV(csv).filter(row => row.join('').trim()!== '');
+    const allRows = parseCSV(csv).filter(r=>r.join('').trim()!=='');
     const dataRows = allRows.slice(2);
 
-    const bulan = {Jan:0,Feb:1,Mar:2,Apr:3,Mei:4,May:4,Jun:5,Jul:6,Agu:7,Aug:7,Sep:8,Okt:9,Oct:9,Nov:10,Des:11,Dec:11};
+    const bulan = {jan:0,feb:1,mar:2,apr:3,mei:4,may:4,jun:5,jul:6,agu:7,aug:7,sep:8,okt:9,oct:9,nov:10,des:11,dec:11};
     const toDay = (s)=>{
-      if(!s) return null;
-      s=s.toString().trim();
-      let m=s.match(/(\d{1,2})-([A-Za-z]{3})-(\d{2,4})/);
-      if(m){ let y=+m[3]; if(y<100) y+=2000; return new Date(Date.UTC(y, bulan[m[2]]??0, +m[1])).toISOString().slice(0,10); }
-      m=s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/);
-      if(!m) return null;
-      return new Date(Date.UTC(+m[3], bulan[m[2]]??0, +m[1])).toISOString().slice(0,10);
+      if(!s) return null; s=s.toString().trim();
+      let m=s.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return s;
+      m=s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/); if(m){let a=+m[1],b=+m[2],y=m[3]; if(a>12) return `${y}-${String(b).padStart(2,'0')}-${String(a).padStart(2,'0')}`; return `${y}-${String(a).padStart(2,'0')}-${String(b).padStart(2,'0')}`;}
+      m=s.match(/(\d{1,2})-([A-Za-z]{3})-(\d{2,4})/); if(m){let y=+m[3]; if(y<100) y+=2000; return `${y}-${String((bulan[m[2].toLowerCase()]??0)+1).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;}
+      m=s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/); if(m) return `${m[3]}-${String((bulan[m[2].toLowerCase()]??0)+1).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`; return null;
     };
 
-    let lastTgl=''; let raw=[];
-    for(let i=0;i<dataRows.length;i++){
-      const cols=dataRows[i];
-      const get=(idx)=>(cols[idx]||'').toString().trim();
-      let tgl=get(0)||lastTgl; if(tgl) lastTgl=tgl; if(!tgl) continue;
-      const detail=get(4)||''; if(!detail) continue;
+    // 1. GROUPING dulu: 1 tanggal bisa 3 baris (Pos + Duration + RFO)
+    let groups = [];
+    let curGroup = null;
+    let lastTgl = '';
+    for(const cols of dataRows){
+      const rawTgl = (cols[0]||'').trim();
+      const detail = (cols[4]||'').toString().trim(); // Kolom E = Detail Outage Icon
+      if(rawTgl){
+        lastTgl = rawTgl;
+        if(curGroup) groups.push(curGroup);
+        curGroup = {tgl: lastTgl, details: []};
+      }
+      if(!curGroup) continue;
+      if(detail) curGroup.details.push(detail);
+    }
+    if(curGroup) groups.push(curGroup);
 
-      // FIX UTAMA: Pisah per nomor saja, JANGAN pisah per baris \n
-      // 1 Pos = 1 chunk utuh berisi Nama + Duration + RFO
-      const chunks = detail.split(/\n\s*\d+\.\s+/);
-      // chunk pertama masih ada "1. " di depan, bersihkan
-      const cleanChunks = chunks.map(c=>c.replace(/^\s*\d+\.\s+/,'').trim()).filter(Boolean);
+    // 2. PARSE tiap group
+    let raw=[];
+    for(const g of groups){
+      const fullText = g.details.join('\n'); // jadi "1. Pos PGA Rinjani\nDuration : 11.23...\nRFO : Gangguan..."
+      if(!fullText) continue;
 
-cleanChunks.forEach(full=>{
-  if(!full) return
-  if(/^(Duration|RFO)\s*:/i.test(full)) return
+      // Regex kuat: bisa 1 Pos bisa 3 Pos dalam 1 cell, pakai enter atau spasi
+      const regex = /(\d+)\.\s*(.*?)\s+Duration\s*:\s*(.*?)\s+RFO\s*:\s*(.*?)(?=\s+\d+\.\s+|$)/gs;
+      let m; let found=false;
+      while((m = regex.exec(fullText))!== null){
+        found=true;
+        const nodeName = m[2].trim();
+        const kendala = `Duration : ${m[3].trim()} RFO : ${m[4].trim()}`; // HAPUS NODE DI KENDALA
+        if(!nodeName || /^(Duration|RFO)/i.test(nodeName)) continue;
+        raw.push({Tanggal:g.tgl,"Node/Pos":nodeName,LINK:'Icon',KENDALA:kendala,_day:toDay(g.tgl)});
+      }
 
-  const durIdx = full.search(/Duration\s*:/i)
-  let nodeName, kendala
-
-  if(durIdx > 0){
-    nodeName = full.substring(0, durIdx).trim()
-    kendala = full.substring(durIdx).trim() // HAPUS NODE, ambil mulai dari Duration
-  } else {
-    nodeName = full.split('\n')[0].trim()
-    kendala = full
-  }
-
-  nodeName = nodeName.replace(/^\d+\.\s+/,'').trim()
-  if(!nodeName) return
-
-  raw.push({
-    Tanggal: tgl,
-    "Node/Pos": nodeName,
-    LINK: 'Icon',
-    KENDALA: kendala, // Sekarang isinya cuma "Duration : 26/11/2025... RFO :..."
-    _day: toDay(tgl)
-  })
-})
+      // Fallback kalau cuma 1 Pos tanpa nomor urut
+      if(!found && /Duration/i.test(fullText)){
+        const durIdx = fullText.search(/Duration\s*:/i);
+        if(durIdx>0){
+          let nodeName = fullText.substring(0,durIdx).replace(/^\d+\.\s+/,'').trim().split('\n').pop().trim();
+          // ambil baris terakhir sebelum Duration yang ada Pos nya
+          const lines = fullText.substring(0,durIdx).split('\n').filter(Boolean);
+          nodeName = lines[lines.length-1]?.replace(/^\d+\.\s+/,'').trim() || nodeName;
+          const kendala = fullText.substring(durIdx).trim();
+          if(nodeName) raw.push({Tanggal:g.tgl,"Node/Pos":nodeName,LINK:'Icon',KENDALA:kendala,_day:toDay(g.tgl)});
+        }
+      }
     }
 
-    // 3H+
     const byNode={}; raw.forEach(o=>{ if(!byNode[o["Node/Pos"]]) byNode[o["Node/Pos"]]=new Set(); if(o._day) byNode[o["Node/Pos"]].add(o._day); });
-    const is3H=(node,day)=>{ const days=[...(byNode[node]||[])].sort(); const idx=days.indexOf(day); if(idx<2) return false; const d1=new Date(days[idx-2]),d2=new Date(days[idx-1]),d3=new Date(days[idx]); return (d2-d1===86400000)&&(d3-d2===86400000); };
-    const data=raw.map(o=>({...o, is3HPlus:is3H(o["Node/Pos"],o._day)}));
+    const is3H=(node,day)=>{ const days=[...(byNode[node]||[])].sort(); const idx=days.indexOf(day); if(idx<2) return false; const d1=new Date(days[idx-2]),d2=new Date(days[idx-1]),d3=new Date(days[idx]); return (d2-d1)/86400000===1 && (d3-d2)/86400000===1; };
+    const data=raw.map(o=>({...o,is3HPlus:is3H(o["Node/Pos"],o._day)}));
 
-    const potonganMap={}; [...data].sort((a,b)=>new Date(a._day)-new Date(b._day)).forEach(o=>{ if(!potonganMap[o["Node/Pos"]]) potonganMap[o["Node/Pos"]]=o; });
-
-    res.setHeader('Cache-Control','s-maxage=60, stale-while-revalidate=300');
-    return res.status(200).json({ data, potongan:Object.values(potonganMap), total:data.length, url:csvUrl });
-  } catch(e){ return res.status(200).json({data:[], error:e.message, total:0}); }
+    return res.status(200).json({
+      data,
+      total:data.length,
+      total3H:data.filter(x=>x.is3HPlus).length,
+      count3hari:Object.keys(byNode).length,
+      potongan:Object.values(Object.fromEntries([...data].sort((a,b)=>new Date(a._day)-new Date(b._day)).map(o=>[o["Node/Pos"],o]))),
+      totalPotongan:Object.keys(byNode).length
+    });
+  }catch(e){
+    return res.status(200).json({data:[], error:e.message});
+  }
 }
