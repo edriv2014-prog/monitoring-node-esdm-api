@@ -11,7 +11,19 @@ export default async function handler(req, res) {
     if (!csvUrl.includes('gid=')) csvUrl += `${csvUrl.includes('?')? '&' : '?'}gid=${gid}&single=true`;
 
     const csv = await (await fetch(csvUrl)).text();
-    function parseCSV(t){const rows=[];let curRow=[],cur='',q=false;for(let i=0;i<t.length;i++){const c=t[i],n=t[i+1];if(c=='"'){if(q&&n=='"'){cur+='"';i++;}else q=!q;}else if(c==','&&!q){curRow.push(cur);cur='';}else if((c=='\n'||c=='\r')&&!q){if(c=='\r'&&n=='\n') i++; curRow.push(cur); rows.push(curRow); curRow=[]; cur='';}else cur+=c;} if(cur||curRow.length){curRow.push(cur); rows.push(curRow);} return rows;}
+
+    function parseCSV(t){
+      const rows=[]; let curRow=[],cur='',q=false;
+      for(let i=0;i<t.length;i++){
+        const c=t[i],n=t[i+1];
+        if(c=='"'){ if(q&&n=='"'){cur+='"'; i++;} else q=!q; }
+        else if(c==','&&!q){curRow.push(cur); cur='';}
+        else if((c=='\n'||c=='\r')&&!q){ if(c=='\r'&&n=='\n') i++; curRow.push(cur); rows.push(curRow); curRow=[]; cur='';}
+        else cur+=c;
+      }
+      if(cur||curRow.length){curRow.push(cur); rows.push(curRow);}
+      return rows;
+    }
 
     const allRows = parseCSV(csv).filter(r=>r.join('').trim()!=='');
     const dataRows = allRows.slice(2);
@@ -25,40 +37,50 @@ export default async function handler(req, res) {
       m=s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/); if(m) return `${m[3]}-${String((bulan[m[2].toLowerCase()]??0)+1).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`; return null;
     };
 
-    let lastTgl=''; let raw=[];
+    // 1. GROUPING dulu: 1 tanggal bisa 3 baris (Pos + Duration + RFO)
+    let groups = [];
+    let curGroup = null;
+    let lastTgl = '';
     for(const cols of dataRows){
-      let tgl=(cols[0]||'').trim()||lastTgl; if(tgl) lastTgl=tgl; if(!tgl) continue;
-      let detail=(cols[4]||'').trim(); if(!detail) continue;
+      const rawTgl = (cols[0]||'').trim();
+      const detail = (cols[4]||'').toString().trim(); // Kolom E = Detail Outage Icon
+      if(rawTgl){
+        lastTgl = rawTgl;
+        if(curGroup) groups.push(curGroup);
+        curGroup = {tgl: lastTgl, details: []};
+      }
+      if(!curGroup) continue;
+      if(detail) curGroup.details.push(detail);
+    }
+    if(curGroup) groups.push(curGroup);
 
-      // === FIX INTI: Pecah per "1. Pos..." "2. Pos..." meski tanpa newline ===
-      // Regex ambil: [nomor] [Nama Pos] Duration :... RFO :...
+    // 2. PARSE tiap group
+    let raw=[];
+    for(const g of groups){
+      const fullText = g.details.join('\n'); // jadi "1. Pos PGA Rinjani\nDuration : 11.23...\nRFO : Gangguan..."
+      if(!fullText) continue;
+
+      // Regex kuat: bisa 1 Pos bisa 3 Pos dalam 1 cell, pakai enter atau spasi
       const regex = /(\d+)\.\s*(.*?)\s+Duration\s*:\s*(.*?)\s+RFO\s*:\s*(.*?)(?=\s+\d+\.\s+|$)/gs;
-      let match;
-      let found = false;
-      while((match = regex.exec(detail))!== null){
-        found = true;
-        const nodeName = match[2].trim().replace(/^\d+\.\s+/, '');
-        const duration = match[3].trim();
-        const rfo = match[4].trim();
-        const kendala = `Duration : ${duration} RFO : ${rfo}`; // TANPA NAMA NODE
-
-        if(/^(Duration|RFO)/i.test(nodeName)) continue;
-        raw.push({Tanggal:tgl,"Node/Pos":nodeName,LINK:'Icon',KENDALA:kendala,_day:toDay(tgl)});
+      let m; let found=false;
+      while((m = regex.exec(fullText))!== null){
+        found=true;
+        const nodeName = m[2].trim();
+        const kendala = `Duration : ${m[3].trim()} RFO : ${m[4].trim()}`; // HAPUS NODE DI KENDALA
+        if(!nodeName || /^(Duration|RFO)/i.test(nodeName)) continue;
+        raw.push({Tanggal:g.tgl,"Node/Pos":nodeName,LINK:'Icon',KENDALA:kendala,_day:toDay(g.tgl)});
       }
 
-      // Fallback kalau format tidak ada Duration/RFO (jaga2)
-      if(!found){
-        const parts = detail.split(/\n\s*(?=\d+\.\s+)/).map(c=>c.replace(/^\s*\d+\.\s+/,'').trim()).filter(Boolean);
-        for(let full of parts){
-          if(!full) continue;
-          const durIdx = full.search(/Duration\s*:/i);
-          if(durIdx>0){
-            const nodeName = full.substring(0,durIdx).trim();
-            const kendala = full.substring(durIdx).trim();
-            raw.push({Tanggal:tgl,"Node/Pos":nodeName,LINK:'Icon',KENDALA:kendala,_day:toDay(tgl)});
-          } else {
-            raw.push({Tanggal:tgl,"Node/Pos":full.split('\n')[0].trim(),LINK:'Icon',KENDALA:full,_day:toDay(tgl)});
-          }
+      // Fallback kalau cuma 1 Pos tanpa nomor urut
+      if(!found && /Duration/i.test(fullText)){
+        const durIdx = fullText.search(/Duration\s*:/i);
+        if(durIdx>0){
+          let nodeName = fullText.substring(0,durIdx).replace(/^\d+\.\s+/,'').trim().split('\n').pop().trim();
+          // ambil baris terakhir sebelum Duration yang ada Pos nya
+          const lines = fullText.substring(0,durIdx).split('\n').filter(Boolean);
+          nodeName = lines[lines.length-1]?.replace(/^\d+\.\s+/,'').trim() || nodeName;
+          const kendala = fullText.substring(durIdx).trim();
+          if(nodeName) raw.push({Tanggal:g.tgl,"Node/Pos":nodeName,LINK:'Icon',KENDALA:kendala,_day:toDay(g.tgl)});
         }
       }
     }
