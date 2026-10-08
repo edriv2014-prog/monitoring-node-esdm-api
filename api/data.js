@@ -18,7 +18,6 @@ export default async function handler(req, res) {
     if(!r.ok) throw new Error('Gagal fetch sheet: ' + r.status);
     const csv = await r.text();
 
-    // === FIX UTAMA: PARSER CSV TAHAN NEWLINE DI DALAM CELL ===
     function parseCSV(text){
       const rows=[]; let curRow=[]; let cur=''; let inQuote=false;
       for(let i=0;i<text.length;i++){
@@ -42,21 +41,18 @@ export default async function handler(req, res) {
     const allRows = parseCSV(csv).filter(row => row.join('').trim()!== '');
     if(allRows.length < 3) return res.status(200).json({data:[], total3H:0, url: csvUrl});
 
-    // Baris 0 = header Icon, DTP | Baris 1 = Backhaul, Outage... | Data mulai baris 2
     const dataRows = allRows.slice(2);
 
     const bulan = {Jan:0,Feb:1,Mar:2,Apr:3,Mei:4,May:4,Jun:5,Jul:6,Agu:7,Aug:7,Sep:8,Okt:9,Oct:9,Nov:10,Des:11,Dec:11};
     const toDay = (s)=>{
       if(!s) return null;
       s = s.toString().trim();
-      // Format baru: 1-Jan-26 atau 1-Jan-2026
       let m = s.match(/(\d{1,2})-([A-Za-z]{3})-(\d{2,4})/);
       if(m){
-        let y = +m[3]; if(y < 100) y += 2000; // 26 -> 2026
+        let y = +m[3]; if(y < 100) y += 2000;
         const d = new Date(Date.UTC(y, bulan[m[2]]??0, +m[1]));
         return d.toISOString().slice(0,10);
       }
-      // Format lama: 01 Jan 2026
       m = s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/);
       if(!m) return null;
       const d = new Date(Date.UTC(+m[3], bulan[m[2]]??0, +m[1]));
@@ -77,22 +73,29 @@ export default async function handler(req, res) {
       const detail = get(4) || '';
       if(!detail) continue;
 
-      // Sekarang detail isinya FULL 4 Pos, tidak kepotong lagi
-      const nodes = detail.split(/\d+\.\s+/).filter(x=>x.trim());
+      // === FIX LAPORAN 1H: 1 chunk = 1 Pos utuh (Node + Duration + RFO) ===
+      const chunks = detail.split(/\s*\d+\.\s+/).filter(x=>x.trim());
 
-      nodes.forEach(nodeLine=>{
-        if(!nodeLine) return;
-        const m = nodeLine.match(/^(.*?)\s+Duration\s*:/i);
-        const node = m? m[1].trim() : nodeLine.split('\n')[0].trim().slice(0,80);
+      chunks.forEach(chunk=>{
+        const full = chunk.trim()
+        if(!full) return
+
+        // Node/Pos = baris pertama sebelum Duration
+        let nodeName = full.split('\n')[0].trim()
+        const durIdx = full.search(/\nDuration\s*:/i)
+        if(durIdx > 0){
+          nodeName = full.substring(0, durIdx).trim()
+        }
+
         raw.push({
           Tanggal: tgl,
-          "Node/Pos": node.replace(/^\s*\d+\.\s*/,'').trim(),
+          "Node/Pos": nodeName.replace(/^\d+\.\s*/,'').trim(),
           LINK: 'Icon',
-          KENDALA: nodeLine.trim(),
+          KENDALA: full, // full 3 baris, bukan cuma 1 baris
           _day: toDay(tgl),
-          _prosesKey: node + '|' + tgl
-        });
-      });
+          _prosesKey: nodeName + '|' + tgl
+        })
+      })
     }
 
     const byNode = {};
@@ -121,7 +124,7 @@ export default async function handler(req, res) {
     }).length;
 
     const potonganMap = {};
-    [...data].sort((a,b)=> new Date(a._day) - new Date(b._day)).forEach(o=>{
+    ;[...data].sort((a,b)=> new Date(a._day) - new Date(b._day)).forEach(o=>{
       if(!potonganMap[o["Node/Pos"]]) potonganMap[o["Node/Pos"]] = o;
     });
 
