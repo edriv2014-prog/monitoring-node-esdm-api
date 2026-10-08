@@ -1,4 +1,3 @@
-
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
@@ -59,32 +58,21 @@ export default async function handler(req, res) {
       // chunk pertama masih ada "1. " di depan, bersihkan
       const cleanChunks = chunks.map(c=>c.replace(/^\s*\d+\.\s+/,'').trim()).filter(Boolean);
 
-cleanChunks.forEach(full=>{
-  if(!full) return
-  if(/^(Duration|RFO)\s*:/i.test(full)) return
+      cleanChunks.forEach(full=>{
+        if(!full) return;
+        // Node/Pos = ambil sampai sebelum kata Duration
+        const durPos = full.search(/\s*Duration\s*:/i);
+        let nodeName = durPos > 0? full.substring(0, durPos).trim() : full.split('\n')[0].trim();
 
-  const durIdx = full.search(/Duration\s*:/i)
-  let nodeName, kendala
-
-  if(durIdx > 0){
-    nodeName = full.substring(0, durIdx).trim()
-    kendala = full.substring(durIdx).trim() // HAPUS NODE, ambil mulai dari Duration
-  } else {
-    nodeName = full.split('\n')[0].trim()
-    kendala = full
-  }
-
-  nodeName = nodeName.replace(/^\d+\.\s+/,'').trim()
-  if(!nodeName) return
-
-  raw.push({
-    Tanggal: tgl,
-    "Node/Pos": nodeName,
-    LINK: 'Icon',
-    KENDALA: kendala, // Sekarang isinya cuma "Duration : 26/11/2025... RFO :..."
-    _day: toDay(tgl)
-  })
-})
+        raw.push({
+          Tanggal: tgl,
+          "Node/Pos": nodeName,
+          LINK: 'Icon',
+          KENDALA: full, // ini yang bener, full Duration + RFO
+          _day: toDay(tgl),
+          _prosesKey: nodeName+'|'+tgl
+        });
+      });
     }
 
     // 3H+
