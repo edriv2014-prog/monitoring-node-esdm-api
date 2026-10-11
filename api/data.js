@@ -40,94 +40,72 @@ export default async function handler(req, res) {
       return new Date(Date.UTC(+m[3], bulan[m[2]]??0, +m[1])).toISOString().slice(0,10);
     };
 
-    // 1. GROUP per tanggal (1 tanggal bisa 3 baris fisik)
+    // 1. GROUP per tanggal
     let groups = [];
     let curGroup = null;
     for(const cols of dataRows){
-      const get=(idx)=>(cols[idx]||'').toString().trim();
-      const rawTgl = get(0);
-      const detail = get(4); // Detail Outage Icon
+      const get=(idx)=>(cols[idx]||'').toString();
+      const rawTgl = get(0).trim();
+      const detailIcon = get(4); // Detail Outage Icon
+      const detailOver = get(5); // Detail Overload (kolom sebelahnya)
       if(rawTgl){
         if(curGroup) groups.push(curGroup);
-        curGroup = {tgl: rawTgl, details: []};
+        curGroup = {tgl: rawTgl, texts: []};
       }
       if(!curGroup) continue;
-      if(detail) curGroup.details.push(detail);
+      // Ambil kedua kolom, Icon dan Overload, biar 18 Juni yang 6 Icon + 3 Overload semua kebaca
+      if(detailIcon.trim()) curGroup.texts.push(detailIcon);
+      if(detailOver.trim()) curGroup.texts.push(detailOver);
     }
     if(curGroup) groups.push(curGroup);
 
-    // 2. PARSER BARU: cari Duration & RFO dulu, Node diambil dari atasnya (tahan tanpa nomor 1.)
+    // 2. PARSER FINAL: tahan format tanpa nomor "1." juga
     let raw=[];
     for(const g of groups){
-      const fullText = g.details.join('\n');
+      const fullText = g.texts.join('\n');
       if(!fullText) continue;
 
-      // Loop cari semua "Duration : ... RFO : ..."
-      const regex = /Duration\s*:\s*(.*?)\s*RFO\s*:\s*/gis;
-      let match;
-      let lastIndex = 0;
-      let matches = [];
-      while((match = regex.exec(fullText)) !== null){
-        matches.push({durStart: match.index, durEnd: regex.lastIndex, durText: match[1]});
-      }
+      // Pola paling stabil: [optional nomor] [Nama Pos - bisa spasi] newline Duration : ... newline RFO : ... sampai sebelum nomor berikutnya
+      // Menggunakan split dengan lookahead nomor + "Pos" atau "PVMBG" atau "Wisma" atau "Tekmira" atau "Kampus" atau "PATGTL"
+      const blockRegex = /(?:^|\n)\s*(?:\d+[\.\)]\s*)?(.+?)\s*\n\s*Duration\s*:\s*(.+?)\s*\n\s*RFO\s*:\s*(.+?)(?=\n\s*\d+[\.\)]\s+|\n\s*(?:Pos|PVMBG|Wisma|Tekmira|Kampus|PATGTL).*?\n\s*Duration|$)/gis;
 
-      for(let i=0;i<matches.length;i++){
-        const cur = matches[i];
-        const next = matches[i+1];
-        const rfoStart = cur.durEnd;
-        const rfoEnd = next ? next.durStart : fullText.length;
-        let rfoText = fullText.substring(rfoStart, rfoEnd).trim();
-
-        // RFO text mungkin masih ada sisa nomor Pos berikutnya di akhir, potong
-        // Cari pola "2. Pos PGA" di akhir RFO, buang
-        const cutIdx = rfoText.search(/\n?\s*\d+\.\s+Pos|\n\s*[A-Z][a-z]+\s+[A-Z][a-z]+\s+Duration/i);
-        // Tapi untuk kasus 18 Jun, RFO diakhiri newline + "2. Pos...", kita potong yang setelah newline yang ada angka
-        let cleanRfo = rfoText;
-        const nextPosIdx = rfoText.search(/\n\d+\.\s+/);
-        if(nextPosIdx>0){
-          cleanRfo = rfoText.substring(0, nextPosIdx).trim();
-        } else {
-          // kalau RFO dan Pos selanjutnya tanpa newline (spasi): "RFO : ... 2. Pos PGA"
-          const m2 = rfoText.match(/^(.*?)(?=\s+\d+\.\s+Pos)/s);
-          if(m2) cleanRfo = m2[1].trim();
-        }
-
-        // Ambil Node: teks dari akhir RFO sebelumnya sampai awal Duration ini
-        const prevRfoEnd = i===0 ? 0 : matches[i-1].durEnd + matches[i-1].rfoLen || 0;
-        // Simpler: ambil substring dari lastIndex sampai cur.durStart
-        const nodeBlock = fullText.substring(lastIndex, cur.durStart).trim();
-        lastIndex = rfoEnd;
-
-        // Node block bisa berisi: "Pos PGA Tangkoko" atau "2. Pos PGA Tandikat" atau "06) RFO : ..." (sisa)
-        // Ambil baris terakhir yang bukan RFO
-        let lines = nodeBlock.split('\n').map(s=>s.trim()).filter(Boolean);
-        // Buang baris yang isinya cuma "RFO : ..."
-        lines = lines.filter(l=>!/^RFO\s*:/i.test(l));
-        let nodeName = lines.length ? lines[lines.length-1] : '';
-        nodeName = nodeName.replace(/^\d+[\.\)]\s*/,'').trim(); // buang "1. " "2. " "06) "
-        nodeName = nodeName.replace(/^RFO\s*:.*/i,'').trim();
-
-        // Kalau nodeName masih kosong atau malah "Adanya pemadaman" (sisa RFO), ambil dari awal
-        if(!nodeName || /Adanya|Pemadaman|Monitoring/i.test(nodeName) && nodeName.length > 30){
-          // Coba ambil dari baris pertama di nodeBlock yang ada "Pos" atau "PVMBG" atau "Wisma" atau "Tekmira" atau "Kampus"
-          const candidate = nodeBlock.match(/(Pos PGA[^\n]+|PVMBG[^\n]+|Wisma[^\n]+|Tekmira[^\n]+|Kampus[^\n]+)/i);
-          if(candidate) nodeName = candidate[1].replace(/^\d+[\.\)]\s*/,'').trim();
-        }
+      let m;
+      let found = false;
+      while((m = blockRegex.exec(fullText)) !== null){
+        found = true;
+        let nodeName = m[1].trim().replace(/^\d+[\.\)]\s*/,'').trim();
+        // Bersihkan kalau nodeName masih kebawa "RFO : ..." dari block sebelumnya
+        nodeName = nodeName.split('\n').pop().trim().replace(/^\d+[\.\)]\s*/,'').trim();
+        const dur = m[2].trim().replace(/\s+/g,' ');
+        const rfo = m[3].trim().replace(/\s+/g,' ');
 
         if(!nodeName) continue;
         if(nodeName.length < 3) continue;
-        if(/^(Duration|RFO)/i.test(nodeName)) continue;
-
-        // Simpan panjang RFO untuk next iteration
-        matches[i].rfoLen = cleanRfo.length;
+        if(/^(Duration|RFO|Adanya|Monitoring)/i.test(nodeName) && nodeName.length > 15) continue;
 
         raw.push({
           Tanggal: g.tgl,
           "Node/Pos": nodeName,
           LINK: 'Icon',
-          KENDALA: `Duration : ${cur.durText.trim().replace(/\s+/g,' ')} RFO : ${cleanRfo.replace(/\s+/g,' ')}`,
+          KENDALA: `Duration : ${dur} RFO : ${rfo}`,
           _day: toDay(g.tgl)
         });
+      }
+
+      // Fallback super simple kalau regex di atas gagal (untuk 18 Jun yang baris pertama tanpa nomor)
+      if(!found){
+        const parts = fullText.split(/(?=\d+[\.\)]\s+Pos|\d+[\.\)]\s+PVMBG|\d+[\.\)]\s+Wisma|\d+[\.\)]\s+Tekmira|\d+[\.\)]\s+Kampus)/g);
+        for(const p of parts){
+          const durIdx = p.search(/Duration\s*:/i);
+          const rfoIdx = p.search(/RFO\s*:/i);
+          if(durIdx>0 && rfoIdx>0){
+            let node = p.substring(0, durIdx).trim().replace(/^\d+[\.\)]\s*/,'').trim().split('\n').filter(Boolean).pop() || '';
+            node = node.replace(/^\d+[\.\)]\s*/,'').trim();
+            const dur = p.substring(durIdx + 9, rfoIdx).trim().replace(/\s+/g,' ');
+            const rfo = p.substring(rfoIdx + 4).trim().replace(/\s+/g,' ').split(/\n\d+[\.\)]/)[0].trim();
+            if(node) raw.push({Tanggal:g.tgl,"Node/Pos":node,LINK:'Icon',KENDALA:`Duration : ${dur} RFO : ${rfo}`,_day:toDay(g.tgl)});
+          }
+        }
       }
     }
 
