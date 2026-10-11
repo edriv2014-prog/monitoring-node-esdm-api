@@ -14,6 +14,7 @@ export default async function handler(req, res) {
     if (!csvUrl.includes('gid=')) csvUrl += `${csvUrl.includes('?')? '&' : '?'}gid=${gid}&single=true`;
 
     const csv = await (await fetch(csvUrl)).text();
+
     function parseCSV(text){
       const rows=[]; let curRow=[]; let cur=''; let inQuote=false;
       for(let i=0;i<text.length;i++){
@@ -32,7 +33,8 @@ export default async function handler(req, res) {
 
     const bulan = {Jan:0,Feb:1,Mar:2,Apr:3,Mei:4,May:4,Jun:5,Jul:6,Agu:7,Aug:7,Sep:8,Okt:9,Oct:9,Nov:10,Des:11,Dec:11};
     const toDay = (s)=>{
-      if(!s) return null; s=s.toString().trim();
+      if(!s) return null;
+      s=s.toString().trim();
       let m=s.match(/(\d{1,2})-([A-Za-z]{3})-(\d{2,4})/);
       if(m){ let y=+m[3]; if(y<100) y+=2000; return new Date(Date.UTC(y, bulan[m[2]]??0, +m[1])).toISOString().slice(0,10); }
       m=s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/);
@@ -40,49 +42,44 @@ export default async function handler(req, res) {
       return new Date(Date.UTC(+m[3], bulan[m[2]]??0, +m[1])).toISOString().slice(0,10);
     };
 
-    // 1. GROUP per tanggal
+    // === 1. GROUP: 1 tanggal bisa 3 baris fisik (Pos + Duration + RFO) ===
     let groups = [];
     let curGroup = null;
-    for(const cols of dataRows){
-      const get=(idx)=>(cols[idx]||'').toString();
-      const rawTgl = get(0).trim();
-      const detailIcon = get(4); // Detail Outage Icon
-      const detailOver = get(5); // Detail Overload (kolom sebelahnya)
+    let lastTgl = '';
+    for(let i=0;i<dataRows.length;i++){
+      const cols=dataRows[i];
+      const get=(idx)=>(cols[idx]||'').toString().trim();
+      const rawTgl = get(0);
+      const detail = get(4); // Kolom E = Detail Outage Icon
       if(rawTgl){
+        lastTgl = rawTgl;
         if(curGroup) groups.push(curGroup);
-        curGroup = {tgl: rawTgl, texts: []};
+        curGroup = {tgl: lastTgl, details: []};
       }
       if(!curGroup) continue;
-      // Ambil kedua kolom, Icon dan Overload, biar 18 Juni yang 6 Icon + 3 Overload semua kebaca
-      if(detailIcon.trim()) curGroup.texts.push(detailIcon);
-      if(detailOver.trim()) curGroup.texts.push(detailOver);
+      if(detail) curGroup.details.push(detail);
     }
     if(curGroup) groups.push(curGroup);
 
-    // 2. PARSER FINAL: tahan format tanpa nomor "1." juga
+    // === 2. PARSE tiap tanggal ===
     let raw=[];
     for(const g of groups){
-      const fullText = g.texts.join('\n');
+      // Gabung semua baris dalam tanggal yang sama, pertahankan newline
+      const fullText = g.details.join('\n');
       if(!fullText) continue;
 
-      // Pola paling stabil: [optional nomor] [Nama Pos - bisa spasi] newline Duration : ... newline RFO : ... sampai sebelum nomor berikutnya
-      // Menggunakan split dengan lookahead nomor + "Pos" atau "PVMBG" atau "Wisma" atau "Tekmira" atau "Kampus" atau "PATGTL"
-      const blockRegex = /(?:^|\n)\s*(?:\d+[\.\)]\s*)?(.+?)\s*\n\s*Duration\s*:\s*(.+?)\s*\n\s*RFO\s*:\s*(.+?)(?=\n\s*\d+[\.\)]\s+|\n\s*(?:Pos|PVMBG|Wisma|Tekmira|Kampus|PATGTL).*?\n\s*Duration|$)/gis;
-
-      let m;
-      let found = false;
-      while((m = blockRegex.exec(fullText)) !== null){
-        found = true;
-        let nodeName = m[1].trim().replace(/^\d+[\.\)]\s*/,'').trim();
-        // Bersihkan kalau nodeName masih kebawa "RFO : ..." dari block sebelumnya
-        nodeName = nodeName.split('\n').pop().trim().replace(/^\d+[\.\)]\s*/,'').trim();
-        const dur = m[2].trim().replace(/\s+/g,' ');
-        const rfo = m[3].trim().replace(/\s+/g,' ');
-
+      // Regex FINAL: tangkap semua pola
+      // "1. Pos PGA Kaba Duration : ... RFO : ..."
+      // "Duration : ... RFO : ..." (tanpa node) -> akan fallback
+      const regex = /(?:^|\n|\s)(\d+)\.\s*(.*?)\s*Duration\s*:\s*(.*?)\s*RFO\s*:\s*(.*?)(?=\s*\d+\.\s+|$)/gs;
+      let match;
+      let found=false;
+      while((match = regex.exec(fullText))!== null){
+        found=true;
+        const nodeName = match[2].trim();
+        const dur = match[3].trim().replace(/\n/g,' ').replace(/\s+/g,' ');
+        const rfo = match[4].trim().replace(/\n/g,' ').replace(/\s+/g,' ');
         if(!nodeName) continue;
-        if(nodeName.length < 3) continue;
-        if(/^(Duration|RFO|Adanya|Monitoring)/i.test(nodeName) && nodeName.length > 15) continue;
-
         raw.push({
           Tanggal: g.tgl,
           "Node/Pos": nodeName,
@@ -92,18 +89,16 @@ export default async function handler(req, res) {
         });
       }
 
-      // Fallback super simple kalau regex di atas gagal (untuk 18 Jun yang baris pertama tanpa nomor)
+      // Fallback kalau cuma 1 Pos tanpa nomor (harusnya tidak terjadi untuk 5 & 6 Sep tapi jaga2)
       if(!found){
-        const parts = fullText.split(/(?=\d+[\.\)]\s+Pos|\d+[\.\)]\s+PVMBG|\d+[\.\)]\s+Wisma|\d+[\.\)]\s+Tekmira|\d+[\.\)]\s+Kampus)/g);
-        for(const p of parts){
-          const durIdx = p.search(/Duration\s*:/i);
-          const rfoIdx = p.search(/RFO\s*:/i);
-          if(durIdx>0 && rfoIdx>0){
-            let node = p.substring(0, durIdx).trim().replace(/^\d+[\.\)]\s*/,'').trim().split('\n').filter(Boolean).pop() || '';
-            node = node.replace(/^\d+[\.\)]\s*/,'').trim();
-            const dur = p.substring(durIdx + 9, rfoIdx).trim().replace(/\s+/g,' ');
-            const rfo = p.substring(rfoIdx + 4).trim().replace(/\s+/g,' ').split(/\n\d+[\.\)]/)[0].trim();
-            if(node) raw.push({Tanggal:g.tgl,"Node/Pos":node,LINK:'Icon',KENDALA:`Duration : ${dur} RFO : ${rfo}`,_day:toDay(g.tgl)});
+        // Coba pecah manual per "1." "2."
+        const parts = fullText.split(/(?=\d+\.\s+Pos|^\d+\.\s+Pos)/gm).map(s=>s.trim()).filter(Boolean);
+        for(const part of parts){
+          const durIdx = part.search(/Duration\s*:/i);
+          if(durIdx>0){
+            const node = part.substring(0,durIdx).replace(/^\d+\.\s+/,'').trim().split('\n')[0].trim();
+            const kendala = part.substring(durIdx).replace(/\n/g,' ').replace(/\s+/g,' ').trim();
+            if(node) raw.push({Tanggal:g.tgl,"Node/Pos":node,LINK:'Icon',KENDALA:kendala,_day:toDay(g.tgl)});
           }
         }
       }
@@ -115,6 +110,12 @@ export default async function handler(req, res) {
     const potonganMap={}; [...data].sort((a,b)=>new Date(a._day)-new Date(b._day)).forEach(o=>{ if(!potonganMap[o["Node/Pos"]]) potonganMap[o["Node/Pos"]]=o; });
 
     res.setHeader('Cache-Control','s-maxage=60, stale-while-revalidate=300');
-    return res.status(200).json({ data, potongan:Object.values(potonganMap), total:data.length, total3H:data.filter(x=>x.is3HPlus).length, url:csvUrl });
+    return res.status(200).json({ 
+      data, 
+      potongan:Object.values(potonganMap), 
+      total:data.length, 
+      total3H:data.filter(x=>x.is3HPlus).length,
+      url:csvUrl 
+    });
   } catch(e){ return res.status(200).json({data:[], error:e.message, total:0}); }
 }
