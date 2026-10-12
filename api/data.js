@@ -56,13 +56,11 @@ export default async function handler(req, res) {
     }
     if(curGroup) groups.push(curGroup);
 
-    // Fungsi bersihin nomor urut di depan Node: "2. Gedung Arsip" -> "Gedung Arsip", "03. Pos PGA..." -> "Pos PGA..."
     const cleanNode = (s)=>{
-      if(!s) return s;
-      return s
-        .trim()
-        .replace(/^\d+\s*[\.\)]\s*/,'')  // 2.  3.  4.  2) 
-        .replace(/^\d+\s+/,'')           // 2 Gedung Arsip (tanpa titik)
+      if(!s) return '';
+      return s.trim()
+        .replace(/^\s*\d+\s*[\.\)]\s*/g,'') // 2.  2)  2 
+        .replace(/^\s*\d+\s+/,'')           // 2 Gedung
         .trim();
     };
 
@@ -92,9 +90,7 @@ export default async function handler(req, res) {
         if(!/Duration|RFO/i.test(line)){
           const cleaned = cleanNode(line);
           if(cleaned && cleaned.length>=3){
-            if(/Pos|PVMBG|Wisma|Gedung|Kampus|Tekmira|PATGTL|BPH|Ditjen|Geowisata|Bromo|Tangkoko|Talang|Sukabumi|Kelud|Migas|Arsip|Seulawah|Sorik|Salak/i.test(cleaned) || cleaned.length < 50){
-              currentNode = cleaned;
-            }
+            currentNode = cleaned;
           }
           continue;
         }
