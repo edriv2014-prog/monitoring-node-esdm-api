@@ -58,10 +58,13 @@ export default async function handler(req, res) {
 
     const cleanNode = (s)=>{
       if(!s) return '';
-      return s.trim()
-        .replace(/^\s*\d+\s*[\.\)]\s*/g,'') // 2.  2)  2 
-        .replace(/^\s*\d+\s+/,'')           // 2 Gedung
+      let t = s.trim()
+        .replace(/^\s*\d+\s*[\.\)]\s*/g,'')
+        .replace(/^\s*\d+\s+/,'')
         .trim();
+      // bersihin lagi kalau masih ada sisa "3." di depan (kasus double)
+      t = t.replace(/^\s*\d+\s*[\.\)]\s*/g,'').trim();
+      return t;
     };
 
     let raw=[];
@@ -142,6 +145,12 @@ export default async function handler(req, res) {
         }
       }
     }
+
+    // FINAL CLEAN - paksa bersihin semua Node dari nomor di depan
+    raw = raw.map(o => ({
+      ...o,
+      "Node/Pos": cleanNode(o["Node/Pos"])
+    }));
 
     const byNode={}; raw.forEach(o=>{ if(!byNode[o["Node/Pos"]]) byNode[o["Node/Pos"]]=new Set(); if(o._day) byNode[o["Node/Pos"]].add(o._day); });
     const is3H=(node,day)=>{ const days=[...(byNode[node]||[])].sort(); const idx=days.indexOf(day); if(idx<2) return false; const d1=new Date(days[idx-2]),d2=new Date(days[idx-1]),d3=new Date(days[idx]); return (d2-d1===86400000)&&(d3-d2===86400000); };
