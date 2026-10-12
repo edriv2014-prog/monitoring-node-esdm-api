@@ -52,14 +52,8 @@ export default async function handler(req, res) {
       if(detailOver.trim()) curGroup.texts.push(detailOver);
     }
     if(curGroup) groups.push(curGroup);
-    const cleanNode = (s)=>{
-      if(!s) return '';
-      return String(s).trim()
-        .replace(/^\s*\d+\s*[\.\)]\s*/g,'')
-        .replace(/^\s*\d+\s+/,'')
-        .replace(/^\s*\d+\s*[\.\)]\s*/g,'')
-        .trim();
-    };
+    const cleanNode = (s) => String(s||'').replace(/^\s*\d+[^A-Za-z0-9]*/g,'').trim();
+
     let raw=[];
     for(const g of groups){
       let fullText = g.texts.join('\n');
