@@ -39,7 +39,7 @@ export default async function handler(req, res) {
       return new Date(Date.UTC(+m[3], bulan[m[2]]??0, +m[1])).toISOString().slice(0,10);
     };
 
-    // GROUP per tanggal: gabung semua baris fisik yang tanggalnya sama (kasus 1 Sep yang Pos+Duration+RFO dipisah 3 baris)
+    // GROUP per tanggal
     let groups = [];
     let curGroup = null;
     for(const cols of dataRows){
@@ -62,80 +62,96 @@ export default async function handler(req, res) {
       let fullText = g.texts.join('\n');
       if(!fullText) continue;
 
-      // NORMALISASI: paksa setiap " 2. Pos", " 7. Kampus" yang nempel di belakang RFO jadi newline
-      // Jadi "bukti pemadaman 7. Kampus Vyatra Duration" -> "\n7. Kampus Vyatra Duration"
-      fullText = fullText.replace(/\s+(\d+[\.\)]\s+(?:Pos|PVMBG|Wisma|Gedung|Kampus|Tekmira|PATGTL|BBPMB|PPSDM|PPTGL))/gi, '\n$1');
-      
-      // Sekarang setiap Pos harusnya sudah di baris baru
-      // Split pakai regex yang cari blok: [optional nomor] [Nama Pos] Duration : ... RFO : ... sampai sebelum blok berikutnya
-      const entryRegex = /^\s*(?:\d+[\.\)]\s*)?(.+?)\s+Duration\s*:\s*(.+?)\s+RFO\s*:\s*(.+?)$/gim;
+      // NORMALISASI: setiap " 2. Pos" yang nempel di belakang RFO jadi newline
+      fullText = fullText.replace(/\s+(\d+[\.\)]\s+(?:Pos|PVMBG|Wisma|Gedung|Kampus|Tekmira|PATGTL|BBPMB|PPSDM|BPH|Ditjen))/gi, '\n$1');
 
-      // Karena ada yang masih "Pos PGA Tangkoko\nDuration : ...\nRFO : ..." (node di baris terpisah), kita proses dengan cara kedua
-      // Kita pecah per baris yang mengandung Duration
       const lines = fullText.split('\n');
       let currentNode = '';
+      let lastEntry = null;
+
       for(let i=0;i<lines.length;i++){
         let line = lines[i].trim();
         if(!line) continue;
 
-        // Kalau baris ini adalah nama Pos saja (tanpa Duration)
-        if(!/Duration/i.test(line) && !/RFO/i.test(line)){
-          // Simpan sebagai candidate node, bersihkan nomor
-          const cleaned = line.replace(/^\d+[\.\)]\s*/,'').trim();
-          if(cleaned && !/^(Duration|RFO)/i.test(cleaned)){
-            // Hanya simpan kalau mirip nama Pos/Gedung/Wisma dll atau panjang wajar
-            if(/Pos|PVMBG|Wisma|Gedung|Kampus|Tekmira|PATGTL|BBPMB|PPSDM/i.test(cleaned) || cleaned.length < 40){
-              currentNode = cleaned;
+        // Jika baris RFO saja tanpa Duration -> tempel ke entry sebelumnya (kasus 28 Sep)
+        if(/^RFO\s*:/i.test(line) && !/Duration/i.test(line)){
+          if(lastEntry){
+            const extra = line.replace(/^RFO\s*:\s*/i,'').trim();
+            // Jangan tempel kalau baris selanjutnya adalah Node baru untuk tanggal berikutnya (kasus Bireun)
+            const nextLine = (lines[i+1]||'').trim();
+            const nextNextLine = (lines[i+2]||'').trim();
+            if(/Bireun|POP/i.test(line) && /Duration/i.test(nextLine)){
+              // Ini sebenarnya Node baru, bukan RFO lanjutan
+              currentNode = line.replace(/^RFO\s*:\s*/i,'').replace(/pada.*$/i,'').trim() + ' ' + nextLine.split('Duration')[0].trim();
+              // biar loop selanjutnya handle Duration
+            } else {
+              lastEntry.KENDALA += ' ' + extra;
+              lastEntry.KENDALA = lastEntry.KENDALA.replace(/\s+/g,' ').trim();
+              // Cek kalau baris setelah RFO ini masih lanjutan RFO (tanpa keyword Pos/Duration/RFO)
+              if(i+1 < lines.length){
+                const nxt = lines[i+1].trim();
+                if(nxt && !/Duration|RFO/i.test(nxt) && !/^\d+[\.\)]/.test(nxt) && !/Pos PGA|PVMBG|Wisma|Gedung|Kampus|Tekmira|PATGTL|BPH|Ditjen/i.test(nxt)){
+                  // Lanjutan RFO seperti "Bireun ke arah POP"
+                  lastEntry.KENDALA += ' ' + nxt;
+                  i++;
+                }
+              }
             }
           }
           continue;
         }
 
-        // Kalau baris ini mengandung Duration
+        // Baris hanya nama Pos (tanpa Duration/RFO)
+        if(!/Duration|RFO/i.test(line)){
+          const cleaned = line.replace(/^\d+[\.\)]\s*/,'').trim();
+          if(cleaned){
+            currentNode = cleaned;
+          }
+          continue;
+        }
+
+        // Baris mengandung Duration
         if(/Duration/i.test(line)){
           let nodeName = currentNode;
-          // Coba ambil node dari baris yang sama sebelum Duration
           const durIdx = line.search(/Duration/i);
           if(durIdx>0){
-            let beforeDur = line.substring(0, durIdx).trim().replace(/^\d+[\.\)]\s*/,'').trim();
-            if(beforeDur) nodeName = beforeDur;
+            let before = line.substring(0,durIdx).trim().replace(/^\d+[\.\)]\s*/,'').trim();
+            if(before) nodeName = before;
           }
 
-          // Extract Duration dan RFO dari line (dan mungkin lanjut ke baris berikutnya kalau RFO di baris selanjutnya)
-          let durText = '';
-          let rfoText = '';
-          const durMatch = line.match(/Duration\s*:\s*(.*?)\s*RFO\s*:\s*(.*)/i);
-          if(durMatch){
-            durText = durMatch[1].trim();
-            rfoText = durMatch[2].trim();
+          let durText='', rfoText='';
+          const both = line.match(/Duration\s*:\s*(.*?)\s*RFO\s*:\s*(.*)/i);
+          if(both){
+            durText = both[1].trim();
+            rfoText = both[2].trim();
           } else {
-            // Duration di baris ini, RFO di baris selanjutnya
-            const durOnly = line.match(/Duration\s*:\s*(.*)/i);
-            if(durOnly){
-              durText = durOnly[1].trim();
-              // Cari RFO di baris selanjutnya
+            const dOnly = line.match(/Duration\s*:\s*(.*)/i);
+            if(dOnly){
+              durText = dOnly[1].trim();
               if(i+1 < lines.length && /RFO/i.test(lines[i+1])){
-                const rfoOnly = lines[i+1].match(/RFO\s*:\s*(.*)/i);
-                if(rfoOnly){
-                  rfoText = rfoOnly[1].trim();
-                  i++; // skip baris RFO
+                const rOnly = lines[i+1].match(/RFO\s*:\s*(.*)/i);
+                if(rOnly){
+                  rfoText = rOnly[1].trim();
+                  i++;
                 }
               }
             }
           }
 
-          // Bersihkan RFO kalau masih kebawa nomor Pos berikutnya
-          rfoText = rfoText.split(/\s*\d+[\.\)]\s+(?:Pos|PVMBG|Wisma|Gedung|Kampus|Tekmira|PATGTL)/i)[0].trim();
+          // Bersihkan RFO dari sisa nomor Pos berikutnya
+          rfoText = rfoText.split(/\s*\d+[\.\)]\s+(?:Pos|PVMBG|Wisma|Gedung|Kampus|Tekmira|PATGTL|BPH|Ditjen)/i)[0].trim();
 
           if(nodeName && durText){
-            raw.push({
+            const entry = {
               Tanggal: g.tgl,
               "Node/Pos": nodeName,
               LINK: 'Icon',
               KENDALA: `Duration : ${durText.replace(/\s+/g,' ')} RFO : ${rfoText.replace(/\s+/g,' ')}`,
               _day: toDay(g.tgl)
-            });
-            currentNode = ''; // reset
+            };
+            raw.push(entry);
+            lastEntry = entry;
+            currentNode = '';
           }
         }
       }
