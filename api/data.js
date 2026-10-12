@@ -9,140 +9,114 @@ export default async function handler(req, res) {
     return m ? m[0].split('\n')[0].trim() : v.split('\n')[0].trim();
   };
 
-  // CSV parser yang tahan newline di dalam quote
   function parseCSV(text) {
-    const rows = [];
-    let curRow = [];
-    let curCol = '';
-    let inQuote = false;
-    for (let i=0;i<text.length;i++) {
-      const c = text[i];
-      const next = text[i+1];
-      if (c === '"') {
-        if (inQuote && next === '"') { curCol += '"'; i++; }
-        else { inQuote = !inQuote; }
-      } else if (c === ',' && !inQuote) {
-        curRow.push(curCol);
-        curCol = '';
-      } else if ((c === '\n' || c === '\r') && !inQuote) {
-        if (curCol || curRow.length) {
-          curRow.push(curCol);
-          rows.push(curRow);
-          curRow = []; curCol = '';
-        }
-        if (c === '\r' && next === '\n') i++;
-      } else {
-        curCol += c;
-      }
+    const rows=[]; let curRow=[], curCol='', inQuote=false;
+    for(let i=0;i<text.length;i++){
+      const c=text[i], next=text[i+1];
+      if(c==='"'){ if(inQuote && next==='"'){ curCol+='"'; i++; } else inQuote=!inQuote; }
+      else if(c===',' && !inQuote){ curRow.push(curCol); curCol=''; }
+      else if((c==='\n'||c==='\r') && !inQuote){
+        if(curCol||curRow.length){ curRow.push(curCol); rows.push(curRow); curRow=[]; curCol=''; }
+        if(c==='\r' && next==='\n') i++;
+      } else curCol+=c;
     }
-    if (curCol || curRow.length) { curRow.push(curCol); rows.push(curRow); }
+    if(curCol||curRow.length){ curRow.push(curCol); rows.push(curRow); }
     return rows;
   }
 
-  try {
+  try{
     const r = await fetch(SHEET_CSV_URL);
     const text = await r.text();
     const rows = parseCSV(text);
+    const allData=[];
 
-    // rows[0] header, rows[2] subheader, data mulai rows[4] ke bawah
-    const allData = [];
-
-    for (let ri=4; ri<rows.length; ri++) {
-      const cols = rows[ri];
-      if (!cols || cols.length < 5) continue;
-      const tanggal = (cols[0]||'').trim();
-      const icon = (cols[1]||'').trim() || 'Icon';
-      const detail = (cols[4]||'').trim(); // Detail Outage yang isinya banyak node
-      if (!tanggal || !detail) continue;
-      if (!/Jan|Feb|Mar|Apr|Mei|Jun|Jul|Agu|Sep|Okt|Nov|Des/i.test(tanggal)) continue;
-
-      // PECAH detail yang isinya "1. Pos PGA...\n\nDuration : ...\n\nRFO : ...\n\n2. Pos PGA..."
-      // Split pakai lookahead nomor
-      const entries = detail.split(/\n\s*\n\s*(?=\d+\.\s)/g);
-
-      for (const entry of entries) {
-        if (!entry.trim()) continue;
-        const lines = entry.trim().split('\n').map(l=>l.trim()).filter(Boolean);
-        if (!lines.length) continue;
-
-        // Baris pertama adalah "1. Pos PGA Bur Ni Telong" atau "2. Gedung Arsip"
-        let nodeRaw = lines[0];
-        // Kadang node ada di baris "1. Pos PGA Bur Ni Telong" lalu next line langsung Duration, jadi nodeRaw sudah benar
-        const durationLine = lines.find(l=>/Duration\s*:/i.test(l)) || '';
-        const rfoLineIdx = lines.findIndex(l=>/RFO\s*:/i.test(l));
-        let rfo = '';
-        if (rfoLineIdx >=0) {
-          rfo = lines.slice(rfoLineIdx).join(' ').replace(/RFO\s*:\s*/i,'').trim();
-        }
-
-        let duration = '';
-        const durMatch = durationLine.match(/Duration\s*:\s*(.*)/i);
-        if (durMatch) duration = durMatch[1].trim();
-
-        const node = cleanNode(nodeRaw);
-        if (!node) continue;
-
-        // Gabung KENDALA seperti frontend kamu
-        const kendala = `Duration : ${duration} RFO : ${rfo}`;
-
-        allData.push({
-          Tanggal: tanggal,
-          "Node/Pos": node,
-          NodeRaw: nodeRaw,
-          LINK: icon,
-          KENDALA: kendala,
-          Duration: duration,
-          RFO: rfo,
-          _tanggalISO: tanggal
-        });
+    for(let ri=4; ri<rows.length; ri++){
+      const cols=rows[ri];
+      if(!cols||cols.length<5) continue;
+      const tanggal=(cols[0]||'').trim();
+      const icon=(cols[1]||'').trim()||'Normal';
+      const detail=(cols[4]||'').trim();
+      if(!tanggal||!detail) continue;
+      if(!/Jan|Feb|Mar|Apr|Mei|Jun|Jul|Agu|Sep|Okt|Nov|Des/i.test(tanggal)) continue;
+      const entries=detail.split(/\n\s*\n\s*(?=\d+\.\s)/g);
+      for(const entry of entries){
+        if(!entry.trim()) continue;
+        const lines=entry.trim().split('\n').map(l=>l.trim()).filter(Boolean);
+        if(!lines.length) continue;
+        let nodeRaw=lines[0];
+        const durationLine=lines.find(l=>/Duration\s*:/i.test(l))||'';
+        const rfoIdx=lines.findIndex(l=>/RFO\s*:/i.test(l));
+        let rfo=''; if(rfoIdx>=0) rfo=lines.slice(rfoIdx).join(' ').replace(/RFO\s*:\s*/i,'').trim();
+        let duration=''; const m=durationLine.match(/Duration\s*:\s*(.*)/i); if(m) duration=m[1].trim();
+        const node=cleanNode(nodeRaw);
+        if(!node) continue;
+        allData.push({ Tanggal:tanggal, "Node/Pos":node, NodeRaw:nodeRaw, LINK:icon, KENDALA:`Duration : ${duration} RFO : ${rfo}`, Duration:duration, RFO:rfo });
       }
     }
 
-    // Hitung 3H+ - grouping pakai cleanNode (sudah bersih) + tanggal
-    // Untuk contoh kamu: 03 Jan Pos PGA Bur Ni Telong, 04 Jan 2. Pos PGA Bur Ni Telong, 05 Jan 3. Pos PGA Bur Ni Telong -> harus dianggap 1 node 3 hari berturut
+    // === FIX 3H+ REAL - HANYA 3 HARI KALENDER BERTURUT-TURUT ===
     const bulan={Jan:0,Feb:1,Mar:2,Apr:3,Mei:4,May:4,Jun:5,Jul:6,Agu:7,Aug:7,Sep:8,Okt:9,Oct:9,Nov:10,Des:11,Dec:11};
-    const toDate = (s) => {
-      const m = s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/);
-      return m ? new Date(+m[3], bulan[m[2]]??0, +m[1]) : null;
-    };
+    const toDate=(s)=>{ const m=s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/); return m? new Date(+m[3], bulan[m[2]]??0, +m[1]): null; };
+    const toKey=(d)=> d.toISOString().slice(0,10);
 
-    const grouped = {};
-    allData.forEach(o=>{
-      const d = toDate(o.Tanggal);
-      if(!d) return;
-      const key = cleanNode(o["Node/Pos"]).toLowerCase();
-      if(!grouped[key]) grouped[key]=[];
-      grouped[key].push({ date: d, dateStr: o.Tanggal });
-    });
+    // Group by node clean
+    const byNode={};
+    allData.forEach((o,idx)=>{ const k=cleanNode(o["Node/Pos"]).toLowerCase(); if(!byNode[k]) byNode[k]=[]; byNode[k].push({idx, date:toDate(o.Tanggal)}); });
 
-    // Deteksi 3 hari berturut-turut
-    const tigaHariSet = new Set();
-    Object.entries(grouped).forEach(([node, arr])=>{
-      const sorted = [...new Set(arr.map(a=>a.date.getTime()))].sort((a,b)=>a-b).map(t=>new Date(t));
-      for(let i=0;i<sorted.length-2;i++){
-        const d1=sorted[i], d2=sorted[i+1], d3=sorted[i+2];
-        const diff1 = (d2-d1)/(1000*60*60*24);
-        const diff2 = (d3-d2)/(1000*60*60*24);
+    // Untuk tiap node, cari tanggal yang benar-benar bagian dari streak 3 hari berturut
+    const idxYang3H = new Set(); // index allData yang 3H+
+
+    Object.values(byNode).forEach(arr=>{
+      // unique dates sorted
+      const uniqMap={};
+      arr.forEach(a=>{ if(a.date){ uniqMap[toKey(a.date)]=a.date; } });
+      const dates=Object.values(uniqMap).sort((a,b)=>a-b);
+      if(dates.length<3) return;
+
+      // cari window 3 consecutive
+      const datesInStreak = new Set();
+      for(let i=0;i<=dates.length-3;i++){
+        const d1=dates[i], d2=dates[i+1], d3=dates[i+2];
+        const diff1=(d2-d1)/(1000*60*60*24);
+        const diff2=(d3-d2)/(1000*60*60*24);
         if(diff1===1 && diff2===1){
-          tigaHariSet.add(node);
+          datesInStreak.add(toKey(d1)); datesInStreak.add(toKey(d2)); datesInStreak.add(toKey(d3));
+          // extend jika 4,5 hari berturut
+          let j=i+3;
+          while(j<dates.length){
+            const prev=dates[j-1], cur=dates[j];
+            if((cur-prev)/(1000*60*60*24)===1){ datesInStreak.add(toKey(cur)); j++; }
+            else break;
+          }
         }
+      }
+      if(datesInStreak.size>=3){
+        arr.forEach(a=>{
+          if(a.date && datesInStreak.has(toKey(a.date))){
+            idxYang3H.add(a.idx);
+          }
+        });
       }
     });
 
-    const finalData = allData.map(o=>{
-      const key = cleanNode(o["Node/Pos"]).toLowerCase();
-      return { ...o, is3HPlus: tigaHariSet.has(key), _prosesKey: key };
-    });
-
-    const total3H = finalData.filter(f=>f.is3HPlus).length;
-    const count3hari = tigaHariSet.size;
+    const finalData=allData.map((o,idx)=>({
+      ...o,
+      is3HPlus: idxYang3H.has(idx),
+      _prosesKey: cleanNode(o["Node/Pos"]).toLowerCase()
+    }));
 
     res.setHeader("Access-Control-Allow-Origin","*");
     res.setHeader("Access-Control-Allow-Methods","GET,OPTIONS");
     res.setHeader("Cache-Control","s-maxage=60, stale-while-revalidate=300");
-    res.status(200).json({ data: finalData, total: finalData.length, total3H, count3hari, totalPotongan: Object.keys(grouped).length });
-  } catch(e){
+    res.status(200).json({
+      data: finalData,
+      total: finalData.length,
+      total3H: finalData.filter(f=>f.is3HPlus).length,
+      count3hari: new Set(finalData.filter(f=>f.is3HPlus).map(d=>cleanNode(d["Node/Pos"]).toLowerCase())).size,
+      totalPotongan: Object.keys(byNode).length
+    });
+  }catch(e){
     console.error(e);
-    res.status(500).json({ error: e.message, stack: e.stack, data: [] });
+    res.status(500).json({ error:e.message, data:[] });
   }
 }
