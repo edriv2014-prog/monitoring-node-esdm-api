@@ -56,13 +56,14 @@ export default async function handler(req, res) {
     }
     if(curGroup) groups.push(curGroup);
 
-    
     const cleanNode = (s)=>{
+      if(!s) return '';
       return s.trim()
-        .replace(/^\s*\d+\s*[\.\)]\s*/g,'') // 2.  2) 
+        .replace(/^\s*\d+\s*[\.\)]\s*/g,'') // 2.  2)  2 
         .replace(/^\s*\d+\s+/,'')           // 2 Gedung
         .trim();
     };
+
     let raw=[];
     for(const g of groups){
       let fullText = g.texts.join('\n');
