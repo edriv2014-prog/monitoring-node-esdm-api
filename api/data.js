@@ -1,86 +1,35 @@
 export default async function handler(req,res){
   res.setHeader('Access-Control-Allow-Origin','*');
-  res.setHeader('Access-Control-Allow-Methods','GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers','Content-Type');
-  if(req.method==='OPTIONS') return res.status(200).end();
   const gid = req.query.gid || '0';
-  const SHEET_ID = process.env.GOOGLE_SHEET_ID || process.env.VITE_SHEET_ID || '1xxxxxxxxxxxxxxxxxxxx'; // ISI ID SHEET KAMU
-  const csvUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}&_=${Date.now()}`;
+  const SHEET_ID = process.env.GOOGLE_SHEET_ID || '1D2k6V8u1R9x...'; // GANTI DENGAN ID SHEET ASLI KAMU
   try{
-    const resp = await fetch(csvUrl);
-    if(!resp.ok) throw new Error('Fetch sheet failed '+resp.status);
-    let text = await resp.text();
-    // parse CSV robust
-    let lines = text.split(/\r?\n/).filter(l=> l.trim()!=='');
-    if(lines.length===0) return res.json({data:[], total:0});
-
-    // Cari baris header yang mengandung tanggal/node - kalau tidak ada, pakai baris pertama
-    let hIdx = lines.findIndex(l=> /tanggal/i.test(l));
-    if(hIdx===-1) hIdx = 0;
-    let headerLine = lines[hIdx];
-    if(!headerLine) throw new Error('Header not found gid='+gid);
-
-    function splitCSV(line){
-      let out=[], cur='', inQ=false;
-      for(let i=0;i<line.length;i++){
-        let c=line[i];
-        if(c=='"'){ if(line[i+1]=='"'){ cur+='"'; i++; } else inQ=!inQ; }
-        else if(c==',' && !inQ){ out.push(cur); cur=''; }
-        else cur+=c;
-      }
-      out.push(cur);
-      return out.map(s=> s.trim().replace(/^"|"$/g,''));
-    }
-
-    let headers = splitCSV(headerLine).map(h=> h.replace(/\s+/g,' ').trim());
-    // Kalau header kosong, buat default
-    if(headers.every(h=>!h)) headers = ['Tanggal','Status','Jumlah','Node/Pos','Kendala','Duration','RFO','LINK'];
-
+    const csvUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`;
+    const r = await fetch(csvUrl);
+    const txt = await r.text();
+    if(txt.includes('<!DOCTYPE')) throw new Error('Sheet belum Public! Set Share -> Anyone with link Viewer');
+    const lines = txt.split(/\n/).filter(Boolean);
+    if(!lines[0]) throw new Error('CSV kosong gid='+gid);
+    // ANTI ERROR SPLIT - kalau header gak ketemu pakai baris pertama
+    let hIdx = lines.findIndex(l=>/tanggal/i.test(l));
+    if(hIdx===-1) hIdx=0;
+    const header = lines[hIdx] || lines[0];
+    const splitCSV = (s)=>{ let o=[],c='',q=false; for(let ch of s){ if(ch=='"') q=!q; else if(ch==','&&!q){ o.push(c); c=''; } else c+=ch; } o.push(c); return o; };
+    const headers = splitCSV(header);
     let data=[];
     for(let i=hIdx+1;i<lines.length;i++){
-      let cols = splitCSV(lines[i]);
-      if(cols.length<2) continue;
-      let row={};
-      headers.forEach((h,idx)=>{ row[h]=cols[idx]||''; });
-      // Normalisasi
-      let tgl = row['Tanggal']||row['TANGGAL']||row['tanggal']||cols[0]||'';
-      let nodeRaw = row['Node/Pos']||row['NODE/POS']||row['Node']||cols[4]||cols[3]||'';
-      if(!tgl && !nodeRaw) continue;
-
-      // Pecah multiline "1. Pusdatin Duration: 14 jam RFO: ..."
-      let parts = nodeRaw.split(/\n\s*(?=\d+\.\s)/);
-      if(parts.length<=1) parts = [nodeRaw];
-
+      let cols=splitCSV(lines[i]);
+      let tgl=cols[0]||''; let node=cols[4]||cols[3]||'';
+      if(!tgl) continue;
+      // Pecah multiline 1. 2. 3.
+      let parts = node.split(/\n(?=\d+\.)/);
+      if(parts.length==1) parts=[node];
       parts.forEach(p=>{
-        let clean = p.trim(); if(!clean) return;
-        let nameMatch = clean.match(/^\d+\.\s*([^\n]+)/); 
-        let name = nameMatch ? nameMatch[1].split('\n')[0].trim() : clean.split('\n')[0].trim().replace(/^\d+\.\s*/,'');
-        name = name.replace(/^\d+[\.\)]\s*/,'').trim();
-        if(name.length<2) return;
-        let durMatch = clean.match(/Duration\s*:\s*([^\n]+)/i);
-        let dur = durMatch ? durMatch[1].trim() : (row['Duration']||row['DURATION']||'');
-        let rfoMatch = clean.match(/RFO\s*:\s*([\s\S]*?)(?=\n\s*\d+\.|$)/i);
-        let rfo = rfoMatch ? rfoMatch[1].replace(/\n/g,' ').trim() : (row['RFO']||row['Kendala']||'');
-        // Fallback untuk DTP format
-        if(!dur) dur = row['Duration']||'';
-        if(!rfo) rfo = row['RFO']||row['Kendala']||row['KENDALA']||'';
-
-        data.push({
-          Tanggal: tgl,
-          "Node/Pos": name,
-          Kendala: rfo || '-',
-          Duration: dur || '-',
-          RFO: rfo || '-',
-          LINK: row['LINK']||row['Link']||row['link']||'Normal',
-          STATUS: dur && dur!=='-' ? '3H+' : 'Bagus',
-          is3HPlus: /[1-9]\d*\s*jam|[5-9]\d+\s*menit/.test(dur),
-          _raw: clean
-        });
+        let dur = (p.match(/Duration\s*:\s*([^\n]+)/i)?.[1]||'').trim();
+        let rfo = (p.match(/RFO\s*:\s*([^\n]+)/i)?.[1]||'').trim();
+        let name = p.split('\n')[0].replace(/^\d+\.\s*/,'').trim();
+        if(name) data.push({Tanggal:tgl, "Node/Pos":name, Duration:dur||'-', RFO:rfo||'-', Kendala:rfo||dur, LINK:'Normal', is3HPlus:/[1-9]\s*jam/.test(dur)});
       });
     }
-
-    return res.json({data, total:data.length, gid, headers});
-  }catch(e){
-    return res.status(500).json({error:e.message, stack:e.stack, gid});
-  }
+    res.json({data, total:data.length});
+  }catch(e){ res.status(500).json({error:e.message, gid:req.query.gid}); }
 }
