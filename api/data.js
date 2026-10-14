@@ -1,86 +1,82 @@
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // Support?menu=icon/dtp atau?gid=0/1 atau?menu=0/1
-  const qMenu = (req.query.menu || '').toString().toLowerCase();
-  const qGid = (req.query.gid || '').toString();
+  const qMenu = (req.query.menu||'').toLowerCase();
+  const qGid = req.query.gid||'';
+  let gid = '0'; // Icon
+  if(qMenu==='dtp' || qMenu==='1' || qGid==='285923348' || qGid==='1') gid='285923348';
 
-  let gid = '0'; // default Icon
-  if (qMenu === '1' || qMenu === 'dtp' || qMenu === '285923348' || qGid === '1' || qGid === '285923348') {
-    gid = '285923348'; // DTP
-  }
-
-  const ENV_PUB = process.env.SHEET_CSV_URL || 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRs7guoNrzRDNg8bP5epCOXStLlQsd9Ba8hPLweqQELJ5i0e-oEa6KRV1UYZpkvDJLOq8-XtVMn5hls/pub?output=csv';
-  const PUB_BASE = ENV_PUB.split('/pub')[0] + '/pub';
-  const SHEET_ID_REAL = '1f83CxoN-7Oqa_F7LwqejfK8bIrpW0wGJgZAkkeVgbik';
+  const PUB = process.env.SHEET_CSV_URL || 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRs7guoNrzRDNg8bP5epCOXStLlQsd9Ba8hPLweqQELJ5i0e-oEa6KRV1UYZpkvDJLOq8-XtVMn5hls/pub?output=csv';
+  const BASE = PUB.split('/pub')[0]+'/pub';
+  const SHEET_ID = '1f83CxoN-7Oqa_F7LwqejfK8bIrpW0wGJgZAkkeVgbik';
 
   const urls = [
-    `${PUB_BASE}?gid=${gid}&single=true&output=csv&t=${Date.now()}`,
-    `https://docs.google.com/spreadsheets/d/${SHEET_ID_REAL}/export?format=csv&gid=${gid}&t=${Date.now()}`,
-    ENV_PUB
+    `${BASE}?gid=${gid}&single=true&output=csv&t=${Date.now()}`,
+    `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}&t=${Date.now()}`
   ];
 
-  let text = '', csvUrl = '';
-  for (const u of urls) {
-    try {
-      csvUrl = u;
-      const r = await fetch(u);
-      const t = await r.text();
-      if (r.ok &&!t.includes('<!DOCTYPE') && t.length > 100) { text = t; break; }
-    } catch (e) {}
+  let text='';
+  for(const u of urls){
+    try{ const r=await fetch(u); const t=await r.text(); if(r.ok && t.length>100 &&!t.includes('<!DOCTYPE')){ text=t; break; } }catch{}
   }
-  if (!text) return res.json({ data: [], error: 'Fetch gagal', gid, csvUrl });
+  if(!text) return res.json({data:[], gid});
 
-  const parseCSV = (txt) => {
-    const rows=[]; let cr=[],cc='',iq=false;
-    for(let i=0;i<txt.length;i++){ const c=txt[i],n=txt[i+1]; if(c=='"'){ if(iq&&n=='"'){cc+='"';i++;}else iq=!iq; } else if(c==','&&!iq){cr.push(cc);cc='';} else if((c=='\n'||c=='\r')&&!iq){ if(cc||cr.length){cr.push(cc);rows.push(cr);cr=[];cc='';} if(c=='\r'&&n=='\n') i++; } else cc+=c; }
-    if(cc||cr.length){cr.push(cc);rows.push(cr);}
-    return rows;
-  };
+  // parser CSV yang tahan \n di dalam cell
+  const parseCSV = (txt)=>{ const rows=[]; let cr=[],cc='',iq=false; for(let i=0;i<txt.length;i++){ const c=txt[i],n=txt[i+1]; if(c=='"'){ if(iq&&n=='"'){cc+='"';i++;}else iq=!iq; } else if(c==','&&!iq){cr.push(cc);cc='';} else if((c=='\n'||c=='\r')&&!iq){ if(cc||cr.length){cr.push(cc);rows.push(cr);cr=[];cc='';} if(c=='\r'&&n=='\n') i++; } else cc+=c; } if(cc||cr.length){cr.push(cc);rows.push(cr);} return rows; };
 
   const rows = parseCSV(text);
   const hIdx = rows.findIndex(r=>r.join('').toLowerCase().includes('backhaul'));
-  let data = [];
+  let data=[];
 
   for(let i=hIdx+1;i<rows.length;i++){
-    let cols=rows[i]; if(cols.length<3) continue;
-    let tgl=(cols[0]||'').trim(); if(!tgl||tgl.toLowerCase().includes('backhaul')) continue;
+    const cols = rows[i];
+    const tgl = (cols[0]||'').trim();
+    if(!tgl) continue;
 
-    // Detail Outage tidak null - Icon col 3, DTP col 4
-    let detail = cols.find(c=>/Duration\s*:/i.test(c)) || '';
-    if(!detail) detail = gid==='285923348'? (cols[4]||cols[3]||'') : (cols[3]||cols[4]||'');
-    if(!detail||detail.trim()===''||detail.trim()==='-'||detail.toLowerCase()==='null') continue;
+    // === INI KUNCINYA SOBAT! ===
+    // ICON ada di kolom 5 (index 5), DTP ada di kolom 10 (index 10) sesuai SS kamu
+    // Kita ambil sesuai gid, jangan pakai find!
+    let detail = '';
+    if(gid==='0'){ // ICON
+      detail = cols[5] || cols[4] || cols[3] || '';
+    } else { // DTP
+      detail = cols[10] || cols[9] || cols[11] || '';
+      // kalau CSV single=true DTP, detail jadi di cols[1] atau cols[2]
+      if(!detail ||!detail.includes('Duration')) detail = cols[1] || cols[2] || cols[0] || '';
+    }
+    // kalau masih kosong, fallback cari Duration di setengah kanan/kiri
+    if(!detail.includes('Duration')){
+      const half = gid==='0'? cols.slice(0,6).join('\n') : cols.slice(6).join('\n');
+      if(half.includes('Duration')) detail = half;
+    }
 
-    let parts=detail.split(/\n\s*(?=\d+\.\s)/g); if(parts.length<=1) parts=[detail];
+    if(!detail ||!detail.includes('Duration')) continue;
+
+    const parts = detail.split(/\n\s*(?=\d+\.\s)/g);
     parts.forEach(p=>{
-      let clean=p.trim(); if(clean.length<5) return;
-      let lines=clean.split('\n').map(s=>s.trim()).filter(Boolean);
-      let nameRaw=lines[0]||'';
-      let name=nameRaw.replace(/^\d+[\.\)]\s*/,'').trim().split(/Duration|RFO/i)[0].trim();
-      if(!name||name.length<3||/duration|rfo/i.test(name)) return;
-
-      let dur=(clean.match(/Duration\s*:\s*([^\n]+)/i)?.[1]||'').trim();
-      let rfo=(clean.match(/RFO\s*:\s*([^\n]+)/i)?.[1]||'').trim();
-      if(!dur||dur==='-'||dur.toLowerCase()==='null') return;
+      const clean=p.trim(); if(clean.length<10) return;
+      const lines=clean.split('\n').map(s=>s.trim()).filter(Boolean);
+      let name=lines[0].replace(/^\d+[\.\)]\s*/,'').split(/Duration/i)[0].trim();
+      if(!name||name.length<3) return;
+      const dur = clean.match(/Duration\s*:\s*([^\n]+)/i)?.[1]?.trim()||'-';
+      const rfo = clean.match(/RFO\s*:\s*([^\n]+)/i)?.[1]?.trim()||'-';
+      if(dur==='-'||dur.toLowerCase()==='null') return;
 
       data.push({
         Tanggal: tgl,
         "Node/Pos": name,
         Duration: dur,
-        RFO: rfo||'-',
-        Kendala: clean,
-        LINK: 'Normal',
-        _raw: clean
+        RFO: rfo,
+        _raw: clean,
+        source: gid==='0'?'icon':'dtp'
       });
     });
   }
 
-  // Hitung 3 hari berturut-turut muncul
-  const freq = {};
-  data.forEach(d=>{ freq[d["Node/Pos"]] = (freq[d["Node/Pos"]]||0)+1; });
-  data = data.map(d=>({...d, is3HPlus: freq[d["Node/Pos"]] >= 3 }));
+  // 3 hari berturut per node
+  const freq={}; data.forEach(d=>{ freq[d["Node/Pos"]]=(freq[d["Node/Pos"]]||0)+1; });
+  data=data.map(d=>({...d, is3HPlus: freq[d["Node/Pos"]]>=3 }));
 
-  return res.json({ data, total: data.length, gid, menu: gid==='285923348'?'dtp':'icon' });
+  return res.json({data, total:data.length, gid, menu:gid==='0'?'icon':'dtp'});
 }
