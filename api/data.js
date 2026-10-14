@@ -1,35 +1,87 @@
-export default async function handler(req,res){
-  res.setHeader('Access-Control-Allow-Origin','*');
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
   const gid = req.query.gid || '0';
-  const SHEET_ID = process.env.GOOGLE_SHEET_ID || '1D2k6V8u1R9x...'; // GANTI DENGAN ID SHEET ASLI KAMU
-  try{
-    const csvUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`;
-    const r = await fetch(csvUrl);
-    const txt = await r.text();
-    if(txt.includes('<!DOCTYPE')) throw new Error('Sheet belum Public! Set Share -> Anyone with link Viewer');
-    const lines = txt.split(/\n/).filter(Boolean);
-    if(!lines[0]) throw new Error('CSV kosong gid='+gid);
-    // ANTI ERROR SPLIT - kalau header gak ketemu pakai baris pertama
-    let hIdx = lines.findIndex(l=>/tanggal/i.test(l));
-    if(hIdx===-1) hIdx=0;
-    const header = lines[hIdx] || lines[0];
-    const splitCSV = (s)=>{ let o=[],c='',q=false; for(let ch of s){ if(ch=='"') q=!q; else if(ch==','&&!q){ o.push(c); c=''; } else c+=ch; } o.push(c); return o; };
-    const headers = splitCSV(header);
-    let data=[];
-    for(let i=hIdx+1;i<lines.length;i++){
-      let cols=splitCSV(lines[i]);
-      let tgl=cols[0]||''; let node=cols[4]||cols[3]||'';
-      if(!tgl) continue;
-      // Pecah multiline 1. 2. 3.
-      let parts = node.split(/\n(?=\d+\.)/);
-      if(parts.length==1) parts=[node];
-      parts.forEach(p=>{
-        let dur = (p.match(/Duration\s*:\s*([^\n]+)/i)?.[1]||'').trim();
-        let rfo = (p.match(/RFO\s*:\s*([^\n]+)/i)?.[1]||'').trim();
-        let name = p.split('\n')[0].replace(/^\d+\.\s*/,'').trim();
-        if(name) data.push({Tanggal:tgl, "Node/Pos":name, Duration:dur||'-', RFO:rfo||'-', Kendala:rfo||dur, LINK:'Normal', is3HPlus:/[1-9]\s*jam/.test(dur)});
+  // Link publish kamu - sudah fix
+  const PUB_BASE = process.env.SHEET_CSV_URL || process.env.SHEET_CSV_URL... // baca ENV kamu
+// Auto jadi: /pub?gid=285923348&single=true&output=csv
+    const csvUrl = `${PUB_BASE.split('?')[0]}?gid=${gid}&single=true&output=csv`
+
+  try {
+    const resp = await fetch(csvUrl);
+    const text = await resp.text();
+    
+    if (!resp.ok || text.includes('<!DOCTYPE') || text.length < 10) {
+      return res.status(500).json({ error: `Fetch publish failed ${resp.status}`, gid, url: csvUrl, preview: text.substring(0,200) });
+    }
+
+    const lines = text.split(/\r?\n/).filter(l => l.trim() !== '');
+    if (lines.length === 0) return res.json({ data: [], total: 0, gid });
+
+    let hIdx = lines.findIndex(l => /tanggal/i.test(l));
+    if (hIdx === -1) hIdx = 0;
+
+    const splitCSV = (line) => {
+      let out = [], cur = '', inQ = false;
+      for (let i = 0; i < line.length; i++) {
+        let c = line[i];
+        if (c === '"') {
+          if (line[i+1] === '"') { cur += '"'; i++; }
+          else inQ = !inQ;
+        } else if (c === ',' && !inQ) { out.push(cur); cur = ''; }
+        else cur += c;
+      }
+      out.push(cur);
+      return out.map(s => s.replace(/^"|"$/g, '').trim());
+    };
+
+    let data = [];
+    for (let i = hIdx + 1; i < lines.length; i++) {
+      let cols = splitCSV(lines[i]);
+      if (cols.length < 2) continue;
+      let tgl = (cols[0] || '').trim();
+      if (!tgl || /tanggal/i.test(tgl)) continue;
+
+      // Di sheet publish kamu: cek posisi Node
+      // Biasanya: Tanggal, ..., Node, Kendala, Duration, RFO
+      let nodeRaw = cols[3] || cols[4] || cols[2] || '';
+      let kendalaCol = cols[4] || cols[5] || '';
+      
+      let full = (nodeRaw + ' ' + kendalaCol).trim();
+      let parts = nodeRaw.split(/\n(?=\d+\.\s)/);
+      if (parts.length === 1 && full.includes('\n')) {
+        parts = full.split(/\n(?=\d+\.\s)/);
+      }
+      if (parts.length <= 1) parts = [full || nodeRaw];
+
+      parts.forEach(p => {
+        let clean = p.trim();
+        if (!clean || clean.length < 3) return;
+        let name = clean.split('\n')[0].replace(/^\d+[\.\)]\s*/, '').trim();
+        name = name.split(/Duration|RFO/i)[0].trim();
+        if (name.length < 2 || /duration|rfo/i.test(name)) return;
+
+        let dur = (clean.match(/Duration\s*:\s*([^\n]+)/i)?.[1] || '').trim();
+        let rfo = (clean.match(/RFO\s*:\s*([\s\S]*?)(?=\n\s*\d+\.|$)/i)?.[1] || '').trim().replace(/\n/g, ' ');
+
+        if (name) {
+          data.push({
+            Tanggal: tgl,
+            "Node/Pos": name,
+            Duration: dur || '-',
+            RFO: rfo || '-',
+            Kendala: rfo || dur || '-',
+            LINK: 'Normal',
+            is3HPlus: /[1-9]\d*\s*jam|[5-9]\d+\s*menit/.test(dur)
+          });
+        }
       });
     }
-    res.json({data, total:data.length});
-  }catch(e){ res.status(500).json({error:e.message, gid:req.query.gid}); }
+
+    return res.json({ data, total: data.length, gid, source: 'publish' });
+  } catch (e) {
+    return res.status(500).json({ error: e.message, gid });
+  }
 }
