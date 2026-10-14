@@ -81,7 +81,7 @@ export default async function handler(req, res) {
       });
     }
 
-    return res.json({ data, total: data.length, gid, source: 'publish' });
+    return res.json({ data,csvUrl:csvUrl, total: data.length, gid, source: 'publish' });
   } catch (e) {
     return res.status(500).json({ error: e.message, gid });
   }
