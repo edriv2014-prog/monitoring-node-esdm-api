@@ -19,5 +19,6 @@ app.get('/api/data', async (req,res)=>{
 })
 
 app.get('/', (req,res)=> res.json({ok:true}))
+app.use('/api/users', require('./routes/users'));
 
 export default app
